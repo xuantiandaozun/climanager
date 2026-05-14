@@ -530,9 +530,17 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.75rem;
   margin-top: 1.25rem;
   font-size: 0.75rem;
   color: var(--muted);
+}
+
+.workspace-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .recent-message-list {

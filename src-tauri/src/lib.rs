@@ -170,6 +170,26 @@ fn delete_workspace(state: tauri::State<'_, AppState>, id: i64) -> Result<Vec<Wo
 }
 
 #[tauri::command]
+fn open_workspace_in_vscode(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+) -> Result<Vec<Workspace>, String> {
+    let db = state.db.lock().map_err(|err| err.to_string())?;
+    let workspace = read_workspace(&db, id)?;
+    open_in_vscode(&workspace.path)?;
+
+    let now = Utc::now().to_rfc3339();
+    db.execute(
+        "update workspaces set last_opened_at = ?1 where id = ?2",
+        params![now, workspace.id],
+    )
+    .map_err(|err| err.to_string())?;
+
+    drop(db);
+    list_workspaces(state)
+}
+
+#[tauri::command]
 fn list_tools(state: tauri::State<'_, AppState>) -> Result<Vec<CliTool>, String> {
     let db = state.db.lock().map_err(|err| err.to_string())?;
     let mut stmt = db
@@ -1070,6 +1090,25 @@ fn spawn_terminal(cwd: &str, command: &str, proxy_url: Option<&str>) -> Result<(
     }
 }
 
+fn open_in_vscode(path: &str) -> Result<(), String> {
+    let vscode_command =
+        detect_command("code").ok_or_else(|| "未检测到 VS Code 的 code 命令".to_string())?;
+    let mut command = Command::new(vscode_command);
+    command.arg(path);
+
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    command
+        .spawn()
+        .map_err(|err| format!("启动 VS Code 失败，请确认已安装 code 命令: {err}"))?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1128,6 +1167,7 @@ pub fn run() {
             list_workspaces,
             add_workspace,
             delete_workspace,
+            open_workspace_in_vscode,
             list_tools,
             get_proxy_config,
             save_proxy_config,

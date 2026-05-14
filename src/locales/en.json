@@ -31,6 +31,8 @@
     "view_records": "View Records",
     "launch_selected": "Launch Selected",
     "add_workspace": "Add Workspace",
+    "open_in_vscode": "Open in VS Code",
+    "open_in_vscode_short": "VS Code",
     "view_sessions": "View Sessions",
     "remove": "Remove",
     "open": "Open",
@@ -96,6 +98,7 @@
     "proxy_disabled": "Proxy disabled",
     "select_workspace_and_tool": "Select a workspace and tool first",
     "launched_in": "Launched {tool} in {name}",
+    "opened_in_vscode": "Opened {name} in VS Code",
     "read_session_records": "Read {count} session records",
     "no_session_records": "No session records returned",
     "session_opened": "Opened session: {title}"

@@ -9,7 +9,12 @@
     "build": "vue-tsc --noEmit && vite build",
     "build:desktop": "tauri build",
     "preview": "vite preview",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "icons:generate": "powershell -ExecutionPolicy Bypass -File scripts/msix/generate-assets.ps1",
+    "msix:stage": "powershell -ExecutionPolicy Bypass -File scripts/msix/stage.ps1",
+    "msix:pack": "powershell -ExecutionPolicy Bypass -File scripts/msix/pack.ps1",
+    "msix:sign-dev": "powershell -ExecutionPolicy Bypass -File scripts/msix/sign-dev.ps1",
+    "msix:build": "pnpm msix:stage && pnpm msix:pack"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

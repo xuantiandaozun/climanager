@@ -185,6 +185,19 @@ async function removeWorkspace(workspace: Workspace) {
   }
 }
 
+async function openWorkspaceInVSCode(workspace: Workspace) {
+  isBusy.value = true
+  try {
+    workspaces.value = await invoke<Workspace[]>('open_workspace_in_vscode', { id: workspace.id })
+    selectedWorkspaceId.value = workspace.id
+    statusMessage.value = t('status.opened_in_vscode', { name: workspace.name })
+  } catch (error) {
+    statusMessage.value = readableError(error)
+  } finally {
+    isBusy.value = false
+  }
+}
+
 async function saveProxy() {
   isBusy.value = true
   try {
@@ -424,6 +437,13 @@ function readableError(error: unknown) {
             </div>
             <div class="panel-actions">
               <button class="ghost" :disabled="isBusy" @click="addWorkspace">{{ $t('button.add_workspace') }}</button>
+              <button
+                class="ghost"
+                :disabled="isBusy || !selectedWorkspace"
+                @click="selectedWorkspace && openWorkspaceInVSCode(selectedWorkspace)"
+              >
+                {{ $t('button.open_in_vscode') }}
+              </button>
               <button class="ghost" :disabled="isLoadingToolSessions" @click="loadToolSessions">
                 {{ $t('button.view_sessions') }}
               </button>
@@ -446,7 +466,14 @@ function readableError(error: unknown) {
               <p>{{ workspace.path }}</p>
               <div class="workspace-meta">
                 <span>ID {{ workspace.id }}</span>
-                <button class="mini-button" @click.stop="removeWorkspace(workspace)">{{ $t('button.remove') }}</button>
+                <div class="workspace-actions">
+                  <button class="mini-button" :disabled="isBusy" @click.stop="openWorkspaceInVSCode(workspace)">
+                    {{ $t('button.open_in_vscode_short') }}
+                  </button>
+                  <button class="mini-button" :disabled="isBusy" @click.stop="removeWorkspace(workspace)">
+                    {{ $t('button.remove') }}
+                  </button>
+                </div>
               </div>
             </article>
           </div>
