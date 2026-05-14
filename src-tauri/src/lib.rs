@@ -1091,20 +1091,29 @@ fn spawn_terminal(cwd: &str, command: &str, proxy_url: Option<&str>) -> Result<(
 }
 
 fn open_in_vscode(path: &str) -> Result<(), String> {
-    let vscode_command =
-        detect_command("code").ok_or_else(|| "未检测到 VS Code 的 code 命令".to_string())?;
-    let mut command = Command::new(vscode_command);
-    command.arg(path);
-
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
+        if detect_command("code").is_none() {
+            return Err("未检测到 VS Code 的 code 命令".to_string());
+        }
+
+        Command::new("cmd.exe")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["/C", "code", path])
+            .spawn()
+            .map_err(|err| format!("启动 VS Code 失败，请确认已安装 code 命令: {err}"))?;
     }
 
-    command
-        .spawn()
-        .map_err(|err| format!("启动 VS Code 失败，请确认已安装 code 命令: {err}"))?;
+    #[cfg(not(windows))]
+    {
+        let vscode_command =
+            detect_command("code").ok_or_else(|| "未检测到 VS Code 的 code 命令".to_string())?;
+        Command::new(vscode_command)
+            .arg(path)
+            .spawn()
+            .map_err(|err| format!("启动 VS Code 失败，请确认已安装 code 命令: {err}"))?;
+    }
 
     Ok(())
 }
