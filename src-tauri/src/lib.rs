@@ -650,7 +650,12 @@ fn workspace_name_from_path(path: &str) -> String {
 fn detect_command(command: &str) -> Option<String> {
     let binary = command.split_whitespace().next()?;
     let output = if cfg!(windows) {
-        Command::new("where.exe").arg(binary).output().ok()?
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        Command::new("where.exe")
+            .arg(binary)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()?
     } else {
         Command::new("which").arg(binary).output().ok()?
     };
