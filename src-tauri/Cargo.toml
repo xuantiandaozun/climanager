@@ -1,0 +1,21 @@
+[package]
+name = "climanager"
+version = "0.1.0"
+description = "Local-first manager for AI CLI coding workspaces."
+authors = ["climanager contributors"]
+edition = "2021"
+
+[lib]
+name = "climanager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
