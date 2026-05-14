@@ -1,0 +1,111 @@
+{
+  "nav": {
+    "overview": "Overview",
+    "overview_desc": "Configuration overview",
+    "workspaces": "Workspaces",
+    "workspaces_desc": "Manage project directories",
+    "tools": "Tools",
+    "tools_desc": "Select CLI launchers",
+    "proxy": "Proxy",
+    "proxy_desc": "Terminal environment variables",
+    "records": "Records",
+    "records_desc": "History & session index"
+  },
+  "sidebar": {
+    "subtitle": "workspace memory",
+    "status_label": "SQLite local-first"
+  },
+  "page_header": {
+    "subtitle": "Local-first AI CLI workspace manager",
+    "overview": "Overview",
+    "workspaces": "Workspaces",
+    "tools": "Tools",
+    "proxy": "Proxy Settings",
+    "records": "Records"
+  },
+  "button": {
+    "refresh": "Refresh",
+    "manage_workspaces": "Manage",
+    "view_tools": "View Tools",
+    "configure_proxy": "Configure Proxy",
+    "view_records": "View Records",
+    "launch_selected": "Launch Selected",
+    "add_workspace": "Add Workspace",
+    "view_sessions": "View Sessions",
+    "remove": "Remove",
+    "open": "Open",
+    "requery": "Re-query",
+    "querying": "Querying...",
+    "rescan": "Rescan",
+    "save_proxy": "Save Proxy"
+  },
+  "overview": {
+    "workspaces": "Workspaces",
+    "available_tools": "Available Tools",
+    "proxy": "Proxy",
+    "session_index": "Session Index"
+  },
+  "launch": {
+    "quick_launch": "Quick Launch",
+    "current_workspace": "Current Workspace",
+    "current_tool": "Current Tool",
+    "not_selected": "Not selected",
+    "no_workspaces_hint": "Add a project from the Workspaces page first.",
+    "no_tools_hint": "No tools loaded."
+  },
+  "workspaces": {
+    "title": "Manage Project Directories",
+    "no_workspaces_title": "No Workspaces",
+    "no_workspaces_hint": "Click \"Add Workspace\" to select a project directory. It will be saved to local SQLite.",
+    "session_list": "Session List",
+    "current_query": "Current: {workspace} / {tool}",
+    "executed_command": "Executed Command",
+    "no_output": "No output returned.",
+    "no_sessions_title": "No Sessions",
+    "no_sessions_hint": "Select a workspace and tool, then click \"View Sessions\" to execute the session command (results are not saved to the database)."
+  },
+  "tools": {
+    "title": "Select Default CLI Tools",
+    "not_detected": "Not detected in PATH. You can still try to launch it or configure the path manually.",
+    "ready": "ready",
+    "missing": "missing"
+  },
+  "proxy": {
+    "title": "Proxy Configuration",
+    "auto_set": "Auto-set proxy env vars when launching terminal",
+    "current": "Current: {preview}",
+    "host": "Host",
+    "port": "Port"
+  },
+  "records": {
+    "launch_history": "Launch History",
+    "no_history_title": "No Launch History",
+    "no_history_hint": "Select a workspace and tool, then click Launch. It will be written to SQLite.",
+    "session_index": "Session Index",
+    "no_sessions_title": "No Session Index",
+    "no_sessions_hint": "Click \"Rescan\" to scan common tool history directories for files containing workspace paths or names."
+  },
+  "status": {
+    "ready": "Ready",
+    "synced": "SQLite synced",
+    "indexed_sessions": "Indexed {count} session records",
+    "no_sessions_found": "No session files found",
+    "workspace_saved": "Workspace saved to SQLite",
+    "workspace_removed": "Removed {name}",
+    "proxy_saved": "Proxy saved: {url}",
+    "proxy_disabled": "Proxy disabled",
+    "select_workspace_and_tool": "Select a workspace and tool first",
+    "launched_in": "Launched {tool} in {name}",
+    "read_session_records": "Read {count} session records",
+    "no_session_records": "No session records returned",
+    "session_opened": "Opened session: {title}"
+  },
+  "time": {
+    "not_launched": "Not launched",
+    "not_enabled": "Not enabled",
+    "incomplete": "Proxy config incomplete"
+  },
+  "lang": {
+    "switch_to": "中文"
+  }
+}

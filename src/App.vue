@@ -2,6 +2,9 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t, locale } = useI18n()
 
 type Tool = {
   id: number
@@ -71,17 +74,17 @@ const toolSessions = ref<ToolSessionList | null>(null)
 const proxy = ref<ProxyConfig>({ enabled: false, host: '127.0.0.1', port: '7890' })
 const selectedWorkspaceId = ref<number | null>(null)
 const selectedToolId = ref<number | null>(null)
-const statusMessage = ref('准备就绪')
+const statusMessage = ref('')
 const isBusy = ref(false)
 const isLoadingToolSessions = ref(false)
 const currentPage = ref<PageId>('overview')
 
-const navPages: { id: PageId; label: string; description: string }[] = [
-  { id: 'overview', label: '概览', description: '当前配置总览' },
-  { id: 'workspaces', label: '工作区', description: '管理项目目录' },
-  { id: 'tools', label: '工具', description: '选择 CLI 启动器' },
-  { id: 'proxy', label: '代理', description: '终端环境变量' },
-  { id: 'records', label: '记录', description: '历史与会话索引' },
+const navPages: { id: PageId }[] = [
+  { id: 'overview' },
+  { id: 'workspaces' },
+  { id: 'tools' },
+  { id: 'proxy' },
+  { id: 'records' },
 ]
 
 const selectedWorkspace = computed(() =>
@@ -93,14 +96,21 @@ const selectedTool = computed(() => tools.value.find((tool) => tool.id === selec
 const readyToolCount = computed(() => tools.value.filter((tool) => tool.detected_path).length)
 
 const proxyPreview = computed(() => {
-  if (!proxy.value.enabled) return '未启用'
-  if (!proxy.value.host || !proxy.value.port) return '代理配置不完整'
+  if (!proxy.value.enabled) return t('time.not_enabled')
+  if (!proxy.value.host || !proxy.value.port) return t('time.incomplete')
   return `http://${proxy.value.host}:${proxy.value.port}`
 })
 
 onMounted(() => {
+  statusMessage.value = t('status.ready')
   void refreshAll()
 })
+
+function switchLang(lang: string) {
+  locale.value = lang
+  document.documentElement.lang = lang
+  statusMessage.value = t('status.ready')
+}
 
 async function refreshAll() {
   isBusy.value = true
@@ -120,7 +130,7 @@ async function refreshAll() {
     sessions.value = sessionResult
     selectedWorkspaceId.value ??= workspaces.value[0]?.id ?? null
     selectedToolId.value ??= tools.value[0]?.id ?? null
-    statusMessage.value = '本地 SQLite 已同步'
+    statusMessage.value = t('status.synced')
   } catch (error) {
     statusMessage.value = readableError(error)
   } finally {
@@ -133,8 +143,8 @@ async function scanSessions() {
   try {
     sessions.value = await invoke<SessionRecord[]>('scan_sessions')
     statusMessage.value = sessions.value.length
-      ? `已索引 ${sessions.value.length} 条会话记录`
-      : '未扫描到可关联的会话文件'
+      ? t('status.indexed_sessions', { count: sessions.value.length })
+      : t('status.no_sessions_found')
   } catch (error) {
     statusMessage.value = readableError(error)
   } finally {
@@ -143,7 +153,7 @@ async function scanSessions() {
 }
 
 async function addWorkspace() {
-  const selected = await open({ directory: true, multiple: false, title: '选择项目工作区' })
+  const selected = await open({ directory: true, multiple: false, title: 'Select workspace' })
   if (typeof selected !== 'string') return
 
   isBusy.value = true
@@ -152,7 +162,7 @@ async function addWorkspace() {
       input: { path: selected },
     })
     selectedWorkspaceId.value = workspaces.value[0]?.id ?? null
-    statusMessage.value = '工作区已保存到 SQLite'
+    statusMessage.value = t('status.workspace_saved')
   } catch (error) {
     statusMessage.value = readableError(error)
   } finally {
@@ -167,7 +177,7 @@ async function removeWorkspace(workspace: Workspace) {
     if (selectedWorkspaceId.value === workspace.id) {
       selectedWorkspaceId.value = workspaces.value[0]?.id ?? null
     }
-    statusMessage.value = `已移除 ${workspace.name}`
+    statusMessage.value = t('status.workspace_removed', { name: workspace.name })
   } catch (error) {
     statusMessage.value = readableError(error)
   } finally {
@@ -179,7 +189,9 @@ async function saveProxy() {
   isBusy.value = true
   try {
     proxy.value = await invoke<ProxyConfig>('save_proxy_config', { config: proxy.value })
-    statusMessage.value = proxy.value.enabled ? `代理已保存：${proxyPreview.value}` : '代理已关闭'
+    statusMessage.value = proxy.value.enabled
+      ? t('status.proxy_saved', { url: proxyPreview.value })
+      : t('status.proxy_disabled')
   } catch (error) {
     statusMessage.value = readableError(error)
   } finally {
@@ -189,7 +201,7 @@ async function saveProxy() {
 
 async function launchSelected() {
   if (!selectedWorkspace.value || !selectedTool.value) {
-    statusMessage.value = '请先选择工作区和工具'
+    statusMessage.value = t('status.select_workspace_and_tool')
     return
   }
 
@@ -201,7 +213,10 @@ async function launchSelected() {
         tool_id: selectedTool.value.id,
       },
     })
-    statusMessage.value = `已在 ${selectedWorkspace.value.name} 启动 ${selectedTool.value.name}`
+    statusMessage.value = t('status.launched_in', {
+      name: selectedWorkspace.value.name,
+      tool: selectedTool.value.name,
+    })
     await refreshAll()
   } catch (error) {
     statusMessage.value = readableError(error)
@@ -212,7 +227,7 @@ async function launchSelected() {
 
 async function loadToolSessions() {
   if (!selectedWorkspace.value || !selectedTool.value) {
-    statusMessage.value = '请先选择工作区和工具'
+    statusMessage.value = t('status.select_workspace_and_tool')
     return
   }
 
@@ -225,8 +240,8 @@ async function loadToolSessions() {
       },
     })
     statusMessage.value = toolSessions.value.lines.length
-      ? `已读取 ${toolSessions.value.lines.length} 条会话记录`
-      : '当前工具未返回会话记录'
+      ? t('status.read_session_records', { count: toolSessions.value.lines.length })
+      : t('status.no_session_records')
   } catch (error) {
     statusMessage.value = readableError(error)
   } finally {
@@ -236,7 +251,7 @@ async function loadToolSessions() {
 
 async function openToolSession(session: ToolSessionItem) {
   if (!selectedWorkspace.value || !selectedTool.value) {
-    statusMessage.value = '请先选择工作区和工具'
+    statusMessage.value = t('status.select_workspace_and_tool')
     return
   }
 
@@ -249,7 +264,7 @@ async function openToolSession(session: ToolSessionItem) {
         session_id: session.id,
       },
     })
-    statusMessage.value = `已打开会话：${session.title}`
+    statusMessage.value = t('status.session_opened', { title: session.title })
   } catch (error) {
     statusMessage.value = readableError(error)
   } finally {
@@ -258,8 +273,8 @@ async function openToolSession(session: ToolSessionItem) {
 }
 
 function formatTime(value: string | null) {
-  if (!value) return '未启动'
-  return new Intl.DateTimeFormat('zh-CN', {
+  if (!value) return t('time.not_launched')
+  return new Intl.DateTimeFormat(locale.value, {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -279,7 +294,7 @@ function readableError(error: unknown) {
         <img src="/logo.png" alt="CLI Manager" class="brand-logo" />
         <div>
           <p>CLI Manager</p>
-          <small>workspace memory</small>
+          <small>{{ $t('sidebar.subtitle') }}</small>
         </div>
       </div>
 
@@ -291,13 +306,25 @@ function readableError(error: unknown) {
           type="button"
           @click="currentPage = page.id"
         >
-          <span>{{ page.label }}</span>
-          <small>{{ page.description }}</small>
+          <span>{{ $t('nav.' + page.id) }}</span>
+          <small>{{ $t('nav.' + page.id + '_desc') }}</small>
         </button>
       </nav>
 
+      <div class="lang-switcher">
+        <button
+          :class="['lang-btn', { active: locale === 'zh-CN' }]"
+          @click="switchLang('zh-CN')"
+        >中文</button>
+        <span class="lang-divider">/</span>
+        <button
+          :class="['lang-btn', { active: locale === 'en' }]"
+          @click="switchLang('en')"
+        >EN</button>
+      </div>
+
       <div class="open-source-card">
-        <span>SQLite local-first</span>
+        <span>{{ $t('sidebar.status_label') }}</span>
         <strong>{{ statusMessage }}</strong>
       </div>
     </aside>
@@ -305,55 +332,51 @@ function readableError(error: unknown) {
     <section class="content">
       <header class="page-header">
         <div>
-          <p class="eyebrow">Local-first AI CLI workspace manager</p>
-          <h1 v-if="currentPage === 'overview'">概览</h1>
-          <h1 v-else-if="currentPage === 'workspaces'">工作区</h1>
-          <h1 v-else-if="currentPage === 'tools'">工具</h1>
-          <h1 v-else-if="currentPage === 'proxy'">代理配置</h1>
-          <h1 v-else>记录</h1>
+          <p class="eyebrow">{{ $t('page_header.subtitle') }}</p>
+          <h1>{{ $t('page_header.' + currentPage) }}</h1>
         </div>
         <div class="hero-actions">
-          <button class="ghost" :disabled="isBusy" @click="refreshAll">刷新</button>
+          <button class="ghost" :disabled="isBusy" @click="refreshAll">{{ $t('button.refresh') }}</button>
         </div>
       </header>
 
       <section v-if="currentPage === 'overview'" class="page-stack">
         <div class="summary-grid">
           <article class="summary-card">
-            <span>工作区</span>
+            <span>{{ $t('overview.workspaces') }}</span>
             <strong>{{ workspaces.length }}</strong>
-            <button class="text-button" type="button" @click="currentPage = 'workspaces'">管理工作区</button>
+            <button class="text-button" type="button" @click="currentPage = 'workspaces'">{{ $t('button.manage_workspaces') }}</button>
           </article>
           <article class="summary-card">
-            <span>可用工具</span>
+            <span>{{ $t('overview.available_tools') }}</span>
             <strong>{{ readyToolCount }} / {{ tools.length }}</strong>
-            <button class="text-button" type="button" @click="currentPage = 'tools'">查看工具</button>
+            <button class="text-button" type="button" @click="currentPage = 'tools'">{{ $t('button.view_tools') }}</button>
           </article>
           <article class="summary-card">
-            <span>代理</span>
+            <span>{{ $t('overview.proxy') }}</span>
             <strong>{{ proxyPreview }}</strong>
-            <button class="text-button" type="button" @click="currentPage = 'proxy'">配置代理</button>
+            <button class="text-button" type="button" @click="currentPage = 'proxy'">{{ $t('button.configure_proxy') }}</button>
           </article>
           <article class="summary-card">
-            <span>会话索引</span>
+            <span>{{ $t('overview.session_index') }}</span>
             <strong>{{ sessions.length }}</strong>
-            <button class="text-button" type="button" @click="currentPage = 'records'">查看记录</button>
+            <button class="text-button" type="button" @click="currentPage = 'records'">{{ $t('button.view_records') }}</button>
           </article>
         </div>
 
         <section class="panel launch-panel">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Quick launch</p>
-              <h2>快速启动</h2>
+              <p class="eyebrow">{{ $t('launch.quick_launch') }}</p>
+              <h2>{{ $t('launch.quick_launch') }}</h2>
             </div>
-            <button class="primary" :disabled="isBusy" @click="launchSelected">启动所选工具</button>
+            <button class="primary" :disabled="isBusy" @click="launchSelected">{{ $t('button.launch_selected') }}</button>
           </div>
           <div class="selection-summary">
             <div class="choice-panel">
               <div class="choice-heading">
-                <span>当前工作区</span>
-                <strong>{{ selectedWorkspace?.name ?? '未选择' }}</strong>
+                <span>{{ $t('launch.current_workspace') }}</span>
+                <strong>{{ selectedWorkspace?.name ?? $t('launch.not_selected') }}</strong>
               </div>
               <div v-if="workspaces.length" class="choice-list">
                 <button
@@ -367,12 +390,12 @@ function readableError(error: unknown) {
                   <small>{{ workspace.path }}</small>
                 </button>
               </div>
-              <p v-else>请先在工作区页面添加一个项目。</p>
+              <p v-else>{{ $t('launch.no_workspaces_hint') }}</p>
             </div>
             <div class="choice-panel">
               <div class="choice-heading">
-                <span>当前工具</span>
-                <strong>{{ selectedTool?.name ?? '未选择' }}</strong>
+                <span>{{ $t('launch.current_tool') }}</span>
+                <strong>{{ selectedTool?.name ?? $t('launch.not_selected') }}</strong>
               </div>
               <div v-if="tools.length" class="choice-list">
                 <button
@@ -386,7 +409,7 @@ function readableError(error: unknown) {
                   <small>{{ tool.command }}</small>
                 </button>
               </div>
-              <p v-else>暂未加载到可用工具。</p>
+              <p v-else>{{ $t('launch.no_tools_hint') }}</p>
             </div>
           </div>
         </section>
@@ -396,15 +419,15 @@ function readableError(error: unknown) {
         <section class="panel workspace-panel">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Pinned projects</p>
-              <h2>管理项目目录</h2>
+              <p class="eyebrow">{{ $t('launch.quick_launch') }}</p>
+              <h2>{{ $t('workspaces.title') }}</h2>
             </div>
             <div class="panel-actions">
-              <button class="ghost" :disabled="isBusy" @click="addWorkspace">添加工作区</button>
+              <button class="ghost" :disabled="isBusy" @click="addWorkspace">{{ $t('button.add_workspace') }}</button>
               <button class="ghost" :disabled="isLoadingToolSessions" @click="loadToolSessions">
-                查看会话列表
+                {{ $t('button.view_sessions') }}
               </button>
-              <button class="primary" :disabled="isBusy" @click="launchSelected">启动所选工具</button>
+              <button class="primary" :disabled="isBusy" @click="launchSelected">{{ $t('button.launch_selected') }}</button>
             </div>
           </div>
 
@@ -423,34 +446,34 @@ function readableError(error: unknown) {
               <p>{{ workspace.path }}</p>
               <div class="workspace-meta">
                 <span>ID {{ workspace.id }}</span>
-                <button class="mini-button" @click.stop="removeWorkspace(workspace)">移除</button>
+                <button class="mini-button" @click.stop="removeWorkspace(workspace)">{{ $t('button.remove') }}</button>
               </div>
             </article>
           </div>
 
           <div v-else class="empty-state">
-            <strong>还没有工作区</strong>
-            <p>点击“添加工作区”选择一个项目目录，它会保存到本地 SQLite。</p>
+            <strong>{{ $t('workspaces.no_workspaces_title') }}</strong>
+            <p>{{ $t('workspaces.no_workspaces_hint') }}</p>
           </div>
         </section>
 
         <section class="panel recent-message-panel">
           <div class="panel-heading compact">
             <div>
-              <p class="eyebrow">Tool sessions</p>
-              <h2>会话列表</h2>
+              <p class="eyebrow">{{ $t('workspaces.session_list') }}</p>
+              <h2>{{ $t('workspaces.session_list') }}</h2>
               <p class="panel-note">
-                当前查询：{{ selectedWorkspace?.name ?? '未选择工作区' }} / {{ selectedTool?.name ?? '未选择工具' }}
+                {{ $t('workspaces.current_query', { workspace: selectedWorkspace?.name ?? $t('launch.not_selected'), tool: selectedTool?.name ?? $t('launch.not_selected') }) }}
               </p>
             </div>
             <button class="text-button" :disabled="isLoadingToolSessions" @click="loadToolSessions">
-              {{ isLoadingToolSessions ? '查询中...' : '重新查询' }}
+              {{ isLoadingToolSessions ? $t('button.querying') : $t('button.requery') }}
             </button>
           </div>
 
           <div v-if="toolSessions" class="recent-message-list">
             <div class="command-output-heading">
-              <span>执行命令</span>
+              <span>{{ $t('workspaces.executed_command') }}</span>
               <code>{{ toolSessions.command }}</code>
             </div>
 
@@ -460,7 +483,7 @@ function readableError(error: unknown) {
                   <strong>{{ session.title }}</strong>
                   <small>{{ session.id }} · {{ session.updated }}</small>
                 </div>
-                <button class="mini-button" :disabled="isBusy" @click="openToolSession(session)">打开</button>
+                <button class="mini-button" :disabled="isBusy" @click="openToolSession(session)">{{ $t('button.open') }}</button>
               </div>
             </article>
 
@@ -471,13 +494,13 @@ function readableError(error: unknown) {
             </article>
 
             <article v-else class="recent-message-card">
-              <pre>{{ toolSessions.output || toolSessions.stderr || '命令没有返回内容。' }}</pre>
+              <pre>{{ toolSessions.output || toolSessions.stderr || $t('workspaces.no_output') }}</pre>
             </article>
           </div>
 
           <div v-else class="empty-state compact-empty">
-            <strong>暂无会话列表</strong>
-            <p>选择工作区和工具后点击“查看会话列表”，会后台执行当前工具的 session 命令，不会保存到数据库。</p>
+            <strong>{{ $t('workspaces.no_sessions_title') }}</strong>
+            <p>{{ $t('workspaces.no_sessions_hint') }}</p>
           </div>
         </section>
       </section>
@@ -486,8 +509,8 @@ function readableError(error: unknown) {
         <section class="panel">
           <div class="panel-heading compact">
             <div>
-              <p class="eyebrow">Launchers</p>
-              <h2>选择默认 CLI 工具</h2>
+              <p class="eyebrow">{{ $t('tools.title') }}</p>
+              <h2>{{ $t('tools.title') }}</h2>
             </div>
           </div>
           <div class="tool-list">
@@ -500,10 +523,10 @@ function readableError(error: unknown) {
               <div>
                 <strong>{{ tool.name }}</strong>
                 <code>{{ tool.command }}</code>
-                <p>{{ tool.detected_path ?? '未在 PATH 中检测到，仍可尝试启动或后续改为手动配置路径。' }}</p>
+                <p>{{ tool.detected_path ?? $t('tools.not_detected') }}</p>
               </div>
               <span :class="['status', tool.detected_path ? 'ready' : 'missing']">
-                {{ tool.detected_path ? 'ready' : 'missing' }}
+                {{ tool.detected_path ? $t('tools.ready') : $t('tools.missing') }}
               </span>
             </article>
           </div>
@@ -514,26 +537,26 @@ function readableError(error: unknown) {
         <section class="panel proxy-panel">
           <div class="panel-heading compact">
             <div>
-              <p class="eyebrow">Terminal env</p>
-              <h2>代理配置</h2>
+              <p class="eyebrow">{{ $t('proxy.title') }}</p>
+              <h2>{{ $t('proxy.title') }}</h2>
             </div>
           </div>
 
           <form class="proxy-form" @submit.prevent="saveProxy">
             <label class="switch-row">
               <input v-model="proxy.enabled" type="checkbox" />
-              <span>启动终端时自动设置代理环境变量</span>
+              <span>{{ $t('proxy.auto_set') }}</span>
             </label>
             <label>
-              <span>Host</span>
+              <span>{{ $t('proxy.host') }}</span>
               <input v-model="proxy.host" placeholder="127.0.0.1" />
             </label>
             <label>
-              <span>Port</span>
+              <span>{{ $t('proxy.port') }}</span>
               <input v-model="proxy.port" placeholder="7890" />
             </label>
-            <p>当前：{{ proxyPreview }}</p>
-            <button class="primary" :disabled="isBusy">保存代理</button>
+            <p>{{ $t('proxy.current', { preview: proxyPreview }) }}</p>
+            <button class="primary" :disabled="isBusy">{{ $t('button.save_proxy') }}</button>
           </form>
         </section>
       </section>
@@ -542,8 +565,8 @@ function readableError(error: unknown) {
         <section class="panel history-panel">
           <div class="panel-heading compact">
             <div>
-              <p class="eyebrow">Recent memory</p>
-              <h2>启动历史</h2>
+              <p class="eyebrow">{{ $t('records.launch_history') }}</p>
+              <h2>{{ $t('records.launch_history') }}</h2>
             </div>
           </div>
           <ol v-if="history.length" class="timeline">
@@ -559,18 +582,18 @@ function readableError(error: unknown) {
             </li>
           </ol>
           <div v-else class="empty-state compact-empty">
-            <strong>暂无启动历史</strong>
-            <p>选择工作区和工具后点击启动，会写入 SQLite。</p>
+            <strong>{{ $t('records.no_history_title') }}</strong>
+            <p>{{ $t('records.no_history_hint') }}</p>
           </div>
         </section>
 
         <section class="panel history-panel">
           <div class="panel-heading compact">
             <div>
-              <p class="eyebrow">Session index</p>
-              <h2>会话索引</h2>
+              <p class="eyebrow">{{ $t('records.session_index') }}</p>
+              <h2>{{ $t('records.session_index') }}</h2>
             </div>
-            <button class="text-button" :disabled="isBusy" @click="scanSessions">重新扫描</button>
+            <button class="text-button" :disabled="isBusy" @click="scanSessions">{{ $t('button.rescan') }}</button>
           </div>
           <ol v-if="sessions.length" class="timeline session-list">
             <li v-for="session in sessions" :key="session.id">
@@ -582,8 +605,8 @@ function readableError(error: unknown) {
             </li>
           </ol>
           <div v-else class="empty-state compact-empty">
-            <strong>暂无会话索引</strong>
-            <p>点击“扫描会话”，会从常见工具历史目录里寻找包含工作区路径或名称的文件。</p>
+            <strong>{{ $t('records.no_sessions_title') }}</strong>
+            <p>{{ $t('records.no_sessions_hint') }}</p>
           </div>
         </section>
       </section>

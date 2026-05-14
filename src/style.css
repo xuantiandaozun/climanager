@@ -141,6 +141,40 @@ button:disabled {
   color: var(--text);
 }
 
+.lang-switcher {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+}
+
+.lang-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.lang-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.lang-btn.active {
+  background: var(--primary);
+  color: var(--primary-fg);
+  border-color: var(--primary);
+}
+
+.lang-divider {
+  color: var(--border-strong);
+  font-size: 0.75rem;
+}
+
 .open-source-card {
   margin-top: auto;
   padding: 1rem;
@@ -825,6 +859,7 @@ button {
     min-width: 6rem;
   }
   
+  .lang-switcher,
   .open-source-card {
     display: none;
   }

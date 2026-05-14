@@ -1,0 +1,111 @@
+{
+  "nav": {
+    "overview": "概览",
+    "overview_desc": "当前配置总览",
+    "workspaces": "工作区",
+    "workspaces_desc": "管理项目目录",
+    "tools": "工具",
+    "tools_desc": "选择 CLI 启动器",
+    "proxy": "代理",
+    "proxy_desc": "终端环境变量",
+    "records": "记录",
+    "records_desc": "历史与会话索引"
+  },
+  "sidebar": {
+    "subtitle": "工作区记忆",
+    "status_label": "SQLite 本地优先"
+  },
+  "page_header": {
+    "subtitle": "Local-first AI CLI workspace manager",
+    "overview": "概览",
+    "workspaces": "工作区",
+    "tools": "工具",
+    "proxy": "代理配置",
+    "records": "记录"
+  },
+  "button": {
+    "refresh": "刷新",
+    "manage_workspaces": "管理工作区",
+    "view_tools": "查看工具",
+    "configure_proxy": "配置代理",
+    "view_records": "查看记录",
+    "launch_selected": "启动所选工具",
+    "add_workspace": "添加工作区",
+    "view_sessions": "查看会话列表",
+    "remove": "移除",
+    "open": "打开",
+    "requery": "重新查询",
+    "querying": "查询中...",
+    "rescan": "重新扫描",
+    "save_proxy": "保存代理"
+  },
+  "overview": {
+    "workspaces": "工作区",
+    "available_tools": "可用工具",
+    "proxy": "代理",
+    "session_index": "会话索引"
+  },
+  "launch": {
+    "quick_launch": "快速启动",
+    "current_workspace": "当前工作区",
+    "current_tool": "当前工具",
+    "not_selected": "未选择",
+    "no_workspaces_hint": "请先在工作区页面添加一个项目。",
+    "no_tools_hint": "暂未加载到可用工具。"
+  },
+  "workspaces": {
+    "title": "管理项目目录",
+    "no_workspaces_title": "还没有工作区",
+    "no_workspaces_hint": "点击「添加工作区」选择一个项目目录，它会保存到本地 SQLite。",
+    "session_list": "会话列表",
+    "current_query": "当前查询：{workspace} / {tool}",
+    "executed_command": "执行命令",
+    "no_output": "命令没有返回内容。",
+    "no_sessions_title": "暂无会话列表",
+    "no_sessions_hint": "选择工作区和工具后点击「查看会话列表」，会后台执行当前工具的 session 命令，不会保存到数据库。"
+  },
+  "tools": {
+    "title": "选择默认 CLI 工具",
+    "not_detected": "未在 PATH 中检测到，仍可尝试启动或后续改为手动配置路径。",
+    "ready": "ready",
+    "missing": "missing"
+  },
+  "proxy": {
+    "title": "代理配置",
+    "auto_set": "启动终端时自动设置代理环境变量",
+    "current": "当前：{preview}",
+    "host": "Host",
+    "port": "Port"
+  },
+  "records": {
+    "launch_history": "启动历史",
+    "no_history_title": "暂无启动历史",
+    "no_history_hint": "选择工作区和工具后点击启动，会写入 SQLite。",
+    "session_index": "会话索引",
+    "no_sessions_title": "暂无会话索引",
+    "no_sessions_hint": "点击「扫描会话」，会从常见工具历史目录里寻找包含工作区路径或名称的文件。"
+  },
+  "status": {
+    "ready": "准备就绪",
+    "synced": "本地 SQLite 已同步",
+    "indexed_sessions": "已索引 {count} 条会话记录",
+    "no_sessions_found": "未扫描到可关联的会话文件",
+    "workspace_saved": "工作区已保存到 SQLite",
+    "workspace_removed": "已移除 {name}",
+    "proxy_saved": "代理已保存：{url}",
+    "proxy_disabled": "代理已关闭",
+    "select_workspace_and_tool": "请先选择工作区和工具",
+    "launched_in": "已在 {name} 启动 {tool}",
+    "read_session_records": "已读取 {count} 条会话记录",
+    "no_session_records": "当前工具未返回会话记录",
+    "session_opened": "已打开会话：{title}"
+  },
+  "time": {
+    "not_launched": "未启动",
+    "not_enabled": "未启用",
+    "incomplete": "代理配置不完整"
+  },
+  "lang": {
+    "switch_to": "EN"
+  }
+}
