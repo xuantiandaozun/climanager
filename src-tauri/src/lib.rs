@@ -57,6 +57,23 @@ struct SessionRecord {
     matched_by: String,
 }
 
+#[derive(Debug, Serialize)]
+struct ToolSessionList {
+    command: String,
+    output: String,
+    stderr: String,
+    lines: Vec<String>,
+    sessions: Vec<ToolSessionItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct ToolSessionItem {
+    id: String,
+    title: String,
+    updated: String,
+    line: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ProxyConfig {
     enabled: bool,
@@ -74,6 +91,13 @@ struct WorkspaceInput {
 struct LaunchInput {
     workspace_id: i64,
     tool_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenSessionInput {
+    workspace_id: i64,
+    tool_id: i64,
+    session_id: String,
 }
 
 #[tauri::command]
@@ -94,10 +118,11 @@ fn list_workspaces(state: tauri::State<'_, AppState>) -> Result<Vec<Workspace>, 
 
     let rows = stmt
         .query_map([], |row| {
+            let path: String = row.get(2)?;
             Ok(Workspace {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                path: row.get(2)?,
+                path: clean_path_prefix(&path),
                 created_at: row.get(3)?,
                 last_opened_at: row.get(4)?,
             })
@@ -114,7 +139,9 @@ fn add_workspace(
     input: WorkspaceInput,
 ) -> Result<Vec<Workspace>, String> {
     let path = normalize_path(&input.path)?;
-    let name = input.name.unwrap_or_else(|| workspace_name_from_path(&path));
+    let name = input
+        .name
+        .unwrap_or_else(|| workspace_name_from_path(&path));
     let now = Utc::now().to_rfc3339();
     let db = state.db.lock().map_err(|err| err.to_string())?;
 
@@ -200,10 +227,11 @@ fn list_launch_history(state: tauri::State<'_, AppState>) -> Result<Vec<LaunchRe
 
     let rows = stmt
         .query_map([], |row| {
+            let workspace_path: String = row.get(2)?;
             Ok(LaunchRecord {
                 id: row.get(0)?,
                 workspace_name: row.get(1)?,
-                workspace_path: row.get(2)?,
+                workspace_path: clean_path_prefix(&workspace_path),
                 tool_name: row.get(3)?,
                 command: row.get(4)?,
                 launched_at: row.get(5)?,
@@ -253,6 +281,42 @@ fn scan_sessions(
 }
 
 #[tauri::command]
+fn list_tool_sessions(
+    state: tauri::State<'_, AppState>,
+    input: LaunchInput,
+) -> Result<ToolSessionList, String> {
+    let db = state.db.lock().map_err(|err| err.to_string())?;
+    let workspace = read_workspace(&db, input.workspace_id)?;
+    let tool = read_tool(&db, input.tool_id)?;
+    let proxy = read_proxy_config(&db)?;
+    let proxy_url = proxy_url(&proxy);
+    drop(db);
+
+    run_tool_session_command(
+        &workspace.path,
+        &tool.name,
+        &tool.command,
+        proxy_url.as_deref(),
+    )
+}
+
+#[tauri::command]
+fn open_tool_session(
+    state: tauri::State<'_, AppState>,
+    input: OpenSessionInput,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|err| err.to_string())?;
+    let workspace = read_workspace(&db, input.workspace_id)?;
+    let tool = read_tool(&db, input.tool_id)?;
+    let proxy = read_proxy_config(&db)?;
+    let proxy_url = proxy_url(&proxy);
+    drop(db);
+
+    let command = tool_open_session_command(&tool.name, &tool.command, &input.session_id)?;
+    spawn_terminal(&workspace.path, &command, proxy_url.as_deref())
+}
+
+#[tauri::command]
 fn launch_tool(
     state: tauri::State<'_, AppState>,
     input: LaunchInput,
@@ -263,10 +327,11 @@ fn launch_tool(
             "select id, name, path, created_at, last_opened_at from workspaces where id = ?1",
             params![input.workspace_id],
             |row| {
+                let path: String = row.get(2)?;
                 Ok(Workspace {
                     id: row.get(0)?,
                     name: row.get(1)?,
-                    path: row.get(2)?,
+                    path: clean_path_prefix(&path),
                     created_at: row.get(3)?,
                     last_opened_at: row.get(4)?,
                 })
@@ -414,10 +479,11 @@ fn read_workspaces(db: &Connection) -> Result<Vec<Workspace>, String> {
 
     let rows = stmt
         .query_map([], |row| {
+            let path: String = row.get(2)?;
             Ok(Workspace {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                path: row.get(2)?,
+                path: clean_path_prefix(&path),
                 created_at: row.get(3)?,
                 last_opened_at: row.get(4)?,
             })
@@ -426,6 +492,24 @@ fn read_workspaces(db: &Connection) -> Result<Vec<Workspace>, String> {
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|err| err.to_string())
+}
+
+fn read_workspace(db: &Connection, id: i64) -> Result<Workspace, String> {
+    db.query_row(
+        "select id, name, path, created_at, last_opened_at from workspaces where id = ?1",
+        params![id],
+        |row| {
+            let path: String = row.get(2)?;
+            Ok(Workspace {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                path: clean_path_prefix(&path),
+                created_at: row.get(3)?,
+                last_opened_at: row.get(4)?,
+            })
+        },
+    )
+    .map_err(|_| "工作区不存在".to_string())
 }
 
 fn read_tools(db: &Connection) -> Result<Vec<CliTool>, String> {
@@ -448,6 +532,24 @@ fn read_tools(db: &Connection) -> Result<Vec<CliTool>, String> {
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|err| err.to_string())
+}
+
+fn read_tool(db: &Connection, id: i64) -> Result<CliTool, String> {
+    db.query_row(
+        "select id, name, command, enabled from tools where id = ?1",
+        params![id],
+        |row| {
+            let command: String = row.get(2)?;
+            Ok(CliTool {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                detected_path: detect_command(&command),
+                command,
+                enabled: row.get::<_, i64>(3)? == 1,
+            })
+        },
+    )
+    .map_err(|_| "工具不存在".to_string())
 }
 
 fn read_sessions(db: &Connection) -> Result<Vec<SessionRecord>, String> {
@@ -482,7 +584,11 @@ fn read_sessions(db: &Connection) -> Result<Vec<SessionRecord>, String> {
 
 fn read_proxy_config(db: &Connection) -> Result<ProxyConfig, String> {
     let value: Option<String> = db
-        .query_row("select value from settings where key = 'proxy'", [], |row| row.get(0))
+        .query_row(
+            "select value from settings where key = 'proxy'",
+            [],
+            |row| row.get(0),
+        )
         .ok();
 
     match value {
@@ -500,7 +606,11 @@ fn proxy_url(config: &ProxyConfig) -> Option<String> {
         return None;
     }
 
-    Some(format!("http://{}:{}", config.host.trim(), config.port.trim()))
+    Some(format!(
+        "http://{}:{}",
+        config.host.trim(),
+        config.port.trim()
+    ))
 }
 
 fn normalize_path(path: &str) -> Result<String, String> {
@@ -513,7 +623,20 @@ fn normalize_path(path: &str) -> Result<String, String> {
         return Err("工作区必须是目录".to_string());
     }
 
-    Ok(canonical.to_string_lossy().replace('\\', "/"))
+    Ok(clean_path_prefix(&canonical.to_string_lossy()))
+}
+
+fn clean_path_prefix(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+
+    if let Some(path) = normalized.strip_prefix("//?/UNC/") {
+        return format!("//{path}");
+    }
+
+    normalized
+        .strip_prefix("//?/")
+        .unwrap_or(&normalized)
+        .to_string()
 }
 
 fn workspace_name_from_path(path: &str) -> String {
@@ -678,10 +801,227 @@ fn updated_at(path: &Path) -> String {
     datetime.to_rfc3339()
 }
 
+fn run_tool_session_command(
+    cwd: &str,
+    tool_name: &str,
+    command: &str,
+    proxy_url: Option<&str>,
+) -> Result<ToolSessionList, String> {
+    if let Some(unsupported) = unsupported_background_session_list(tool_name, command) {
+        return Ok(unsupported);
+    }
+
+    let session_command = tool_session_command(tool_name, command);
+
+    #[cfg(windows)]
+    let output = {
+        let mut script = String::new();
+        if let Some(proxy_url) = proxy_url {
+            script.push_str(&format!(
+                "$env:HTTP_PROXY='{0}'; $env:HTTPS_PROXY='{0}'; $env:ALL_PROXY='{0}'; ",
+                proxy_url
+            ));
+        }
+        script.push_str(&session_command);
+
+        Command::new("powershell.exe")
+            .current_dir(cwd)
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .map_err(|err| format!("查询会话列表失败: {err}"))?
+    };
+
+    #[cfg(not(windows))]
+    let output = {
+        let mut shell_command = String::new();
+        if let Some(proxy_url) = proxy_url {
+            shell_command.push_str(&format!(
+                "export HTTP_PROXY='{0}' HTTPS_PROXY='{0}' ALL_PROXY='{0}'; ",
+                proxy_url
+            ));
+        }
+        shell_command.push_str(&session_command);
+
+        Command::new("sh")
+            .current_dir(cwd)
+            .args(["-lc", &shell_command])
+            .output()
+            .map_err(|err| format!("查询会话列表失败: {err}"))?
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if !output.status.success() && stdout.is_empty() {
+        return Err(if stderr.is_empty() {
+            "查询会话列表失败".to_string()
+        } else {
+            stderr
+        });
+    }
+
+    let lines = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let sessions = parse_tool_sessions(tool_name, &lines);
+
+    Ok(ToolSessionList {
+        command: session_command,
+        output: stdout,
+        stderr,
+        lines,
+        sessions,
+    })
+}
+
+fn unsupported_background_session_list(tool_name: &str, command: &str) -> Option<ToolSessionList> {
+    let tool_name = tool_name.to_lowercase();
+    let command = command.trim();
+
+    if tool_name.contains("codex") {
+        let message = "Codex 当前通过交互式选择器恢复会话：codex resume --all。该命令要求真实终端，不能在后台捕获为列表；打开指定会话时使用 codex resume <session_id>。";
+        return Some(ToolSessionList {
+            command: format!("{command} resume --all"),
+            output: message.to_string(),
+            stderr: String::new(),
+            lines: vec![message.to_string()],
+            sessions: Vec::new(),
+        });
+    }
+
+    if tool_name.contains("claude") {
+        let message = "Claude Code 当前通过交互式选择器恢复会话：claude --resume。该命令要求真实终端，不能在后台捕获为列表；打开指定会话时使用 claude --resume <session_id>。";
+        return Some(ToolSessionList {
+            command: format!("{command} --resume"),
+            output: message.to_string(),
+            stderr: String::new(),
+            lines: vec![message.to_string()],
+            sessions: Vec::new(),
+        });
+    }
+
+    None
+}
+
+fn tool_session_command(tool_name: &str, command: &str) -> String {
+    let command = command.trim();
+    let tool_name = tool_name.to_lowercase();
+
+    if tool_name.contains("opencode") {
+        format!("{command} session list")
+    } else if tool_name.contains("codex") {
+        format!("{command} resume --all")
+    } else if tool_name.contains("claude") {
+        format!("{command} --resume")
+    } else {
+        format!("{command} session")
+    }
+}
+
+fn tool_open_session_command(
+    tool_name: &str,
+    command: &str,
+    session_id: &str,
+) -> Result<String, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("会话 ID 不能为空".to_string());
+    }
+
+    let command = command.trim();
+    let tool_name = tool_name.to_lowercase();
+
+    if tool_name.contains("opencode") {
+        Ok(format!("{command} -s {session_id}"))
+    } else if tool_name.contains("codex") {
+        Ok(format!("{command} resume {}", shell_arg(session_id)))
+    } else if tool_name.contains("claude") {
+        Ok(format!("{command} --resume {}", shell_arg(session_id)))
+    } else {
+        Err(format!("暂不支持打开 {tool_name} 的指定会话"))
+    }
+}
+
+fn shell_arg(value: &str) -> String {
+    if value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.'))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "''"))
+    }
+}
+
+fn parse_tool_sessions(tool_name: &str, lines: &[String]) -> Vec<ToolSessionItem> {
+    let tool_name = tool_name.to_lowercase();
+    if tool_name.contains("opencode") {
+        return lines
+            .iter()
+            .filter_map(|line| parse_opencode_session_line(line))
+            .collect();
+    }
+
+    lines
+        .iter()
+        .filter_map(|line| parse_generic_session_line(line))
+        .collect()
+}
+
+fn parse_opencode_session_line(line: &str) -> Option<ToolSessionItem> {
+    let first = line.split_whitespace().next()?;
+    if !first.starts_with("ses_") {
+        return None;
+    }
+
+    let rest = line.strip_prefix(first)?.trim();
+    let mut parts = rest.rsplitn(2, char::is_whitespace);
+    let updated = parts.next().unwrap_or_default().trim().to_string();
+    let title = parts.next().unwrap_or(rest).trim().to_string();
+
+    Some(ToolSessionItem {
+        id: first.to_string(),
+        title: if title.is_empty() {
+            first.to_string()
+        } else {
+            title
+        },
+        updated,
+        line: line.to_string(),
+    })
+}
+
+fn parse_generic_session_line(line: &str) -> Option<ToolSessionItem> {
+    let first = line.split_whitespace().next()?;
+    let looks_like_id = first.len() >= 8
+        && first
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'));
+    if !looks_like_id {
+        return None;
+    }
+
+    let title = line.strip_prefix(first).unwrap_or_default().trim();
+    Some(ToolSessionItem {
+        id: first.to_string(),
+        title: if title.is_empty() {
+            first.to_string()
+        } else {
+            title.to_string()
+        },
+        updated: String::new(),
+        line: line.to_string(),
+    })
+}
+
 fn spawn_terminal(cwd: &str, command: &str, proxy_url: Option<&str>) -> Result<(), String> {
     #[cfg(windows)]
     {
         const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
         let mut script = String::new();
         if let Some(proxy_url) = proxy_url {
             script.push_str(&format!(
@@ -693,7 +1033,7 @@ fn spawn_terminal(cwd: &str, command: &str, proxy_url: Option<&str>) -> Result<(
 
         Command::new("powershell.exe")
             .current_dir(cwd)
-            .creation_flags(CREATE_NEW_CONSOLE)
+            .creation_flags(CREATE_NEW_CONSOLE | CREATE_BREAKAWAY_FROM_JOB)
             .args(["-NoExit", "-Command", &script])
             .spawn()
             .map_err(|err| format!("启动终端失败: {err}"))?;
@@ -742,7 +1082,9 @@ pub fn run() {
             list_launch_history,
             launch_tool,
             list_sessions,
-            scan_sessions
+            scan_sessions,
+            list_tool_sessions,
+            open_tool_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running CLI Manager");

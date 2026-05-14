@@ -40,27 +40,57 @@ type SessionRecord = {
   matched_by: string
 }
 
+type ToolSessionList = {
+  command: string
+  output: string
+  stderr: string
+  lines: string[]
+  sessions: ToolSessionItem[]
+}
+
+type ToolSessionItem = {
+  id: string
+  title: string
+  updated: string
+  line: string
+}
+
 type ProxyConfig = {
   enabled: boolean
   host: string
   port: string
 }
 
+type PageId = 'overview' | 'workspaces' | 'tools' | 'proxy' | 'records'
+
 const workspaces = ref<Workspace[]>([])
 const tools = ref<Tool[]>([])
 const history = ref<LaunchRecord[]>([])
 const sessions = ref<SessionRecord[]>([])
+const toolSessions = ref<ToolSessionList | null>(null)
 const proxy = ref<ProxyConfig>({ enabled: false, host: '127.0.0.1', port: '7890' })
 const selectedWorkspaceId = ref<number | null>(null)
 const selectedToolId = ref<number | null>(null)
 const statusMessage = ref('准备就绪')
 const isBusy = ref(false)
+const isLoadingToolSessions = ref(false)
+const currentPage = ref<PageId>('overview')
+
+const navPages: { id: PageId; label: string; description: string }[] = [
+  { id: 'overview', label: '概览', description: '当前配置总览' },
+  { id: 'workspaces', label: '工作区', description: '管理项目目录' },
+  { id: 'tools', label: '工具', description: '选择 CLI 启动器' },
+  { id: 'proxy', label: '代理', description: '终端环境变量' },
+  { id: 'records', label: '记录', description: '历史与会话索引' },
+]
 
 const selectedWorkspace = computed(() =>
   workspaces.value.find((workspace) => workspace.id === selectedWorkspaceId.value),
 )
 
 const selectedTool = computed(() => tools.value.find((tool) => tool.id === selectedToolId.value))
+
+const readyToolCount = computed(() => tools.value.filter((tool) => tool.detected_path).length)
 
 const proxyPreview = computed(() => {
   if (!proxy.value.enabled) return '未启用'
@@ -180,6 +210,53 @@ async function launchSelected() {
   }
 }
 
+async function loadToolSessions() {
+  if (!selectedWorkspace.value || !selectedTool.value) {
+    statusMessage.value = '请先选择工作区和工具'
+    return
+  }
+
+  isLoadingToolSessions.value = true
+  try {
+    toolSessions.value = await invoke<ToolSessionList>('list_tool_sessions', {
+      input: {
+        workspace_id: selectedWorkspace.value.id,
+        tool_id: selectedTool.value.id,
+      },
+    })
+    statusMessage.value = toolSessions.value.lines.length
+      ? `已读取 ${toolSessions.value.lines.length} 条会话记录`
+      : '当前工具未返回会话记录'
+  } catch (error) {
+    statusMessage.value = readableError(error)
+  } finally {
+    isLoadingToolSessions.value = false
+  }
+}
+
+async function openToolSession(session: ToolSessionItem) {
+  if (!selectedWorkspace.value || !selectedTool.value) {
+    statusMessage.value = '请先选择工作区和工具'
+    return
+  }
+
+  isBusy.value = true
+  try {
+    await invoke('open_tool_session', {
+      input: {
+        workspace_id: selectedWorkspace.value.id,
+        tool_id: selectedTool.value.id,
+        session_id: session.id,
+      },
+    })
+    statusMessage.value = `已打开会话：${session.title}`
+  } catch (error) {
+    statusMessage.value = readableError(error)
+  } finally {
+    isBusy.value = false
+  }
+}
+
 function formatTime(value: string | null) {
   if (!value) return '未启动'
   return new Intl.DateTimeFormat('zh-CN', {
@@ -199,7 +276,7 @@ function readableError(error: unknown) {
   <main class="shell">
     <aside class="rail" aria-label="CLI Manager navigation">
       <div class="brand">
-        <span class="brand-mark">CM</span>
+        <img src="/logo.png" alt="CLI Manager" class="brand-logo" />
         <div>
           <p>CLI Manager</p>
           <small>workspace memory</small>
@@ -207,10 +284,16 @@ function readableError(error: unknown) {
       </div>
 
       <nav class="nav-list">
-        <a class="active" href="#workspaces">Workspaces</a>
-        <a href="#tools">Tools</a>
-        <a href="#proxy">Proxy</a>
-        <a href="#history">History</a>
+        <button
+          v-for="page in navPages"
+          :key="page.id"
+          :class="['nav-item', { active: currentPage === page.id }]"
+          type="button"
+          @click="currentPage = page.id"
+        >
+          <span>{{ page.label }}</span>
+          <small>{{ page.description }}</small>
+        </button>
       </nav>
 
       <div class="open-source-card">
@@ -220,62 +303,191 @@ function readableError(error: unknown) {
     </aside>
 
     <section class="content">
-      <header class="hero">
+      <header class="page-header">
         <div>
           <p class="eyebrow">Local-first AI CLI workspace manager</p>
-          <h1>项目、CLI 工具、代理环境，一次配置，下次直接继续。</h1>
-          <p class="hero-copy">
-            工作区、启动记录和会话索引已经接入本地 SQLite；启动终端时会按配置自动注入 HTTP_PROXY、HTTPS_PROXY 和 ALL_PROXY。
-          </p>
+          <h1 v-if="currentPage === 'overview'">概览</h1>
+          <h1 v-else-if="currentPage === 'workspaces'">工作区</h1>
+          <h1 v-else-if="currentPage === 'tools'">工具</h1>
+          <h1 v-else-if="currentPage === 'proxy'">代理配置</h1>
+          <h1 v-else>记录</h1>
         </div>
         <div class="hero-actions">
-          <button class="primary" :disabled="isBusy" @click="addWorkspace">添加工作区</button>
-          <button class="ghost" :disabled="isBusy" @click="scanSessions">扫描会话</button>
           <button class="ghost" :disabled="isBusy" @click="refreshAll">刷新</button>
         </div>
       </header>
 
-      <section id="workspaces" class="panel workspace-panel">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">Pinned projects</p>
-            <h2>工作区</h2>
-          </div>
-          <button class="text-button" :disabled="isBusy" @click="launchSelected">启动所选工具</button>
-        </div>
-
-        <div v-if="workspaces.length" class="workspace-grid">
-          <article
-            v-for="workspace in workspaces"
-            :key="workspace.id"
-            :class="['workspace-card', { selected: workspace.id === selectedWorkspaceId }]"
-            @click="selectedWorkspaceId = workspace.id"
-          >
-            <div class="workspace-topline">
-              <span class="folder-dot"></span>
-              <span>{{ formatTime(workspace.last_opened_at) }}</span>
-            </div>
-            <h3>{{ workspace.name }}</h3>
-            <p>{{ workspace.path }}</p>
-            <div class="workspace-meta">
-              <span>ID {{ workspace.id }}</span>
-              <button class="mini-button" @click.stop="removeWorkspace(workspace)">移除</button>
-            </div>
+      <section v-if="currentPage === 'overview'" class="page-stack">
+        <div class="summary-grid">
+          <article class="summary-card">
+            <span>工作区</span>
+            <strong>{{ workspaces.length }}</strong>
+            <button class="text-button" type="button" @click="currentPage = 'workspaces'">管理工作区</button>
+          </article>
+          <article class="summary-card">
+            <span>可用工具</span>
+            <strong>{{ readyToolCount }} / {{ tools.length }}</strong>
+            <button class="text-button" type="button" @click="currentPage = 'tools'">查看工具</button>
+          </article>
+          <article class="summary-card">
+            <span>代理</span>
+            <strong>{{ proxyPreview }}</strong>
+            <button class="text-button" type="button" @click="currentPage = 'proxy'">配置代理</button>
+          </article>
+          <article class="summary-card">
+            <span>会话索引</span>
+            <strong>{{ sessions.length }}</strong>
+            <button class="text-button" type="button" @click="currentPage = 'records'">查看记录</button>
           </article>
         </div>
 
-        <div v-else class="empty-state">
-          <strong>还没有工作区</strong>
-          <p>点击“添加工作区”选择一个项目目录，它会保存到本地 SQLite。</p>
-        </div>
+        <section class="panel launch-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Quick launch</p>
+              <h2>快速启动</h2>
+            </div>
+            <button class="primary" :disabled="isBusy" @click="launchSelected">启动所选工具</button>
+          </div>
+          <div class="selection-summary">
+            <div class="choice-panel">
+              <div class="choice-heading">
+                <span>当前工作区</span>
+                <strong>{{ selectedWorkspace?.name ?? '未选择' }}</strong>
+              </div>
+              <div v-if="workspaces.length" class="choice-list">
+                <button
+                  v-for="workspace in workspaces"
+                  :key="workspace.id"
+                  :class="['choice-row', { selected: workspace.id === selectedWorkspaceId }]"
+                  type="button"
+                  @click="selectedWorkspaceId = workspace.id"
+                >
+                  <span>{{ workspace.name }}</span>
+                  <small>{{ workspace.path }}</small>
+                </button>
+              </div>
+              <p v-else>请先在工作区页面添加一个项目。</p>
+            </div>
+            <div class="choice-panel">
+              <div class="choice-heading">
+                <span>当前工具</span>
+                <strong>{{ selectedTool?.name ?? '未选择' }}</strong>
+              </div>
+              <div v-if="tools.length" class="choice-list">
+                <button
+                  v-for="tool in tools"
+                  :key="tool.id"
+                  :class="['choice-row', { selected: tool.id === selectedToolId }]"
+                  type="button"
+                  @click="selectedToolId = tool.id"
+                >
+                  <span>{{ tool.name }}</span>
+                  <small>{{ tool.command }}</small>
+                </button>
+              </div>
+              <p v-else>暂未加载到可用工具。</p>
+            </div>
+          </div>
+        </section>
       </section>
 
-      <section class="split">
-        <section id="tools" class="panel">
+      <section v-else-if="currentPage === 'workspaces'" class="page-stack">
+        <section class="panel workspace-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Pinned projects</p>
+              <h2>管理项目目录</h2>
+            </div>
+            <div class="panel-actions">
+              <button class="ghost" :disabled="isBusy" @click="addWorkspace">添加工作区</button>
+              <button class="ghost" :disabled="isLoadingToolSessions" @click="loadToolSessions">
+                查看会话列表
+              </button>
+              <button class="primary" :disabled="isBusy" @click="launchSelected">启动所选工具</button>
+            </div>
+          </div>
+
+          <div v-if="workspaces.length" class="workspace-grid">
+            <article
+              v-for="workspace in workspaces"
+              :key="workspace.id"
+              :class="['workspace-card', { selected: workspace.id === selectedWorkspaceId }]"
+              @click="selectedWorkspaceId = workspace.id"
+            >
+              <div class="workspace-topline">
+                <span class="folder-dot"></span>
+                <span>{{ formatTime(workspace.last_opened_at) }}</span>
+              </div>
+              <h3>{{ workspace.name }}</h3>
+              <p>{{ workspace.path }}</p>
+              <div class="workspace-meta">
+                <span>ID {{ workspace.id }}</span>
+                <button class="mini-button" @click.stop="removeWorkspace(workspace)">移除</button>
+              </div>
+            </article>
+          </div>
+
+          <div v-else class="empty-state">
+            <strong>还没有工作区</strong>
+            <p>点击“添加工作区”选择一个项目目录，它会保存到本地 SQLite。</p>
+          </div>
+        </section>
+
+        <section class="panel recent-message-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p class="eyebrow">Tool sessions</p>
+              <h2>会话列表</h2>
+              <p class="panel-note">
+                当前查询：{{ selectedWorkspace?.name ?? '未选择工作区' }} / {{ selectedTool?.name ?? '未选择工具' }}
+              </p>
+            </div>
+            <button class="text-button" :disabled="isLoadingToolSessions" @click="loadToolSessions">
+              {{ isLoadingToolSessions ? '查询中...' : '重新查询' }}
+            </button>
+          </div>
+
+          <div v-if="toolSessions" class="recent-message-list">
+            <div class="command-output-heading">
+              <span>执行命令</span>
+              <code>{{ toolSessions.command }}</code>
+            </div>
+
+            <article v-if="toolSessions.sessions.length" class="session-command-list">
+              <div v-for="session in toolSessions.sessions" :key="session.id" class="session-command-row session-item-row">
+                <div>
+                  <strong>{{ session.title }}</strong>
+                  <small>{{ session.id }} · {{ session.updated }}</small>
+                </div>
+                <button class="mini-button" :disabled="isBusy" @click="openToolSession(session)">打开</button>
+              </div>
+            </article>
+
+            <article v-else-if="toolSessions.lines.length" class="session-command-list">
+              <div v-for="line in toolSessions.lines" :key="line" class="session-command-row">
+                {{ line }}
+              </div>
+            </article>
+
+            <article v-else class="recent-message-card">
+              <pre>{{ toolSessions.output || toolSessions.stderr || '命令没有返回内容。' }}</pre>
+            </article>
+          </div>
+
+          <div v-else class="empty-state compact-empty">
+            <strong>暂无会话列表</strong>
+            <p>选择工作区和工具后点击“查看会话列表”，会后台执行当前工具的 session 命令，不会保存到数据库。</p>
+          </div>
+        </section>
+      </section>
+
+      <section v-else-if="currentPage === 'tools'" class="page-stack">
+        <section class="panel">
           <div class="panel-heading compact">
             <div>
               <p class="eyebrow">Launchers</p>
-              <h2>工具</h2>
+              <h2>选择默认 CLI 工具</h2>
             </div>
           </div>
           <div class="tool-list">
@@ -296,8 +508,10 @@ function readableError(error: unknown) {
             </article>
           </div>
         </section>
+      </section>
 
-        <section id="proxy" class="panel proxy-panel">
+      <section v-else-if="currentPage === 'proxy'" class="page-stack narrow-page">
+        <section class="panel proxy-panel">
           <div class="panel-heading compact">
             <div>
               <p class="eyebrow">Terminal env</p>
@@ -324,52 +538,54 @@ function readableError(error: unknown) {
         </section>
       </section>
 
-      <section id="history" class="panel history-panel">
-        <div class="panel-heading compact">
-          <div>
-            <p class="eyebrow">Recent memory</p>
-            <h2>启动历史</h2>
-          </div>
-        </div>
-        <ol v-if="history.length" class="timeline">
-          <li v-for="record in history" :key="record.id">
-            <span>{{ formatTime(record.launched_at) }}</span>
+      <section v-else class="page-stack">
+        <section class="panel history-panel">
+          <div class="panel-heading compact">
             <div>
-              <strong>{{ record.workspace_name }} / {{ record.tool_name }}</strong>
-              <p>
-                {{ record.command }} · {{ record.workspace_path }}
-                <template v-if="record.proxy_enabled"> · proxy {{ record.proxy_url }}</template>
-              </p>
+              <p class="eyebrow">Recent memory</p>
+              <h2>启动历史</h2>
             </div>
-          </li>
-        </ol>
-        <div v-else class="empty-state compact-empty">
-          <strong>暂无启动历史</strong>
-          <p>选择工作区和工具后点击启动，会写入 SQLite。</p>
-        </div>
-      </section>
+          </div>
+          <ol v-if="history.length" class="timeline">
+            <li v-for="record in history" :key="record.id">
+              <span>{{ formatTime(record.launched_at) }}</span>
+              <div>
+                <strong>{{ record.workspace_name }} / {{ record.tool_name }}</strong>
+                <p>
+                  {{ record.command }} · {{ record.workspace_path }}
+                  <template v-if="record.proxy_enabled"> · proxy {{ record.proxy_url }}</template>
+                </p>
+              </div>
+            </li>
+          </ol>
+          <div v-else class="empty-state compact-empty">
+            <strong>暂无启动历史</strong>
+            <p>选择工作区和工具后点击启动，会写入 SQLite。</p>
+          </div>
+        </section>
 
-      <section class="panel history-panel">
-        <div class="panel-heading compact">
-          <div>
-            <p class="eyebrow">Session index</p>
-            <h2>会话索引</h2>
-          </div>
-          <button class="text-button" :disabled="isBusy" @click="scanSessions">重新扫描</button>
-        </div>
-        <ol v-if="sessions.length" class="timeline session-list">
-          <li v-for="session in sessions" :key="session.id">
-            <span>{{ formatTime(session.updated_at) }}</span>
+        <section class="panel history-panel">
+          <div class="panel-heading compact">
             <div>
-              <strong>{{ session.workspace_name }} / {{ session.tool_name }} / {{ session.title }}</strong>
-              <p>{{ session.source_path }} · {{ session.matched_by }}</p>
+              <p class="eyebrow">Session index</p>
+              <h2>会话索引</h2>
             </div>
-          </li>
-        </ol>
-        <div v-else class="empty-state compact-empty">
-          <strong>暂无会话索引</strong>
-          <p>点击“扫描会话”，会从常见工具历史目录里寻找包含工作区路径或名称的文件。</p>
-        </div>
+            <button class="text-button" :disabled="isBusy" @click="scanSessions">重新扫描</button>
+          </div>
+          <ol v-if="sessions.length" class="timeline session-list">
+            <li v-for="session in sessions" :key="session.id">
+              <span>{{ formatTime(session.updated_at) }}</span>
+              <div>
+                <strong>{{ session.workspace_name }} / {{ session.tool_name }} / {{ session.title }}</strong>
+                <p>{{ session.source_path }} · {{ session.matched_by }}</p>
+              </div>
+            </li>
+          </ol>
+          <div v-else class="empty-state compact-empty">
+            <strong>暂无会话索引</strong>
+            <p>点击“扫描会话”，会从常见工具历史目录里寻找包含工作区路径或名称的文件。</p>
+          </div>
+        </section>
       </section>
     </section>
   </main>
