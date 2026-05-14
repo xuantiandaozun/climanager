@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::SystemTime;
-use tauri::{AppHandle, Manager};
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuEvent, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Manager, WindowEvent};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -1074,6 +1077,50 @@ pub fn run() {
         .setup(|app| {
             let db = init_database(app.handle())?;
             app.manage(AppState { db: Mutex::new(db) });
+
+            let img = image::load_from_memory(include_bytes!("../icons/tray-icon.png"))
+                .map_err(|e| e.to_string())?
+                .into_rgba8();
+            let (w, h) = img.dimensions();
+            let icon = Image::new_owned(img.into_raw(), w, h);
+
+            let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+
+            TrayIconBuilder::new()
+                .icon(icon)
+                .menu(&menu)
+                .tooltip("CLI Manager")
+                .show_menu_on_left_click(true)
+                .on_menu_event(|app: &AppHandle, event: MenuEvent| {
+                    match event.id().as_ref() {
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .build(app)?;
+
+            let app_handle = app.handle().clone();
+            if let Some(window) = app.get_webview_window("main") {
+                window.on_window_event(move |event: &WindowEvent| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        if let Some(w) = app_handle.get_webview_window("main") {
+                            let _ = w.hide();
+                        }
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
