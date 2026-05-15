@@ -185,6 +185,18 @@ async function removeWorkspace(workspace: Workspace) {
   }
 }
 
+async function openInExplorer(workspace: Workspace) {
+  isBusy.value = true
+  try {
+    await invoke('open_in_explorer', { id: workspace.id })
+    statusMessage.value = t('status.opened_in_explorer', { name: workspace.name })
+  } catch (error) {
+    statusMessage.value = readableError(error)
+  } finally {
+    isBusy.value = false
+  }
+}
+
 async function openWorkspaceInVSCode(workspace: Workspace) {
   isBusy.value = true
   try {
@@ -383,7 +395,10 @@ function readableError(error: unknown) {
               <p class="eyebrow">{{ $t('launch.quick_launch') }}</p>
               <h2>{{ $t('launch.quick_launch') }}</h2>
             </div>
-            <button class="primary" :disabled="isBusy" @click="launchSelected">{{ $t('button.launch_selected') }}</button>
+            <div class="hero-actions">
+              <button class="ghost" :disabled="isBusy || !selectedWorkspace" @click="selectedWorkspace && openWorkspaceInVSCode(selectedWorkspace)">{{ $t('button.open_in_vscode') }}</button>
+              <button class="primary" :disabled="isBusy" @click="launchSelected">{{ $t('button.launch_selected') }}</button>
+            </div>
           </div>
           <div class="selection-summary">
             <div class="choice-panel">
@@ -469,6 +484,9 @@ function readableError(error: unknown) {
                 <div class="workspace-actions">
                   <button class="mini-button" :disabled="isBusy" @click.stop="openWorkspaceInVSCode(workspace)">
                     {{ $t('button.open_in_vscode_short') }}
+                  </button>
+                  <button class="mini-button" :disabled="isBusy" @click.stop="openInExplorer(workspace)">
+                    {{ $t('button.open_in_explorer') }}
                   </button>
                   <button class="mini-button" :disabled="isBusy" @click.stop="removeWorkspace(workspace)">
                     {{ $t('button.remove') }}

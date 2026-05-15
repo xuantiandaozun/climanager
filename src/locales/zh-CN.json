@@ -33,6 +33,7 @@
     "add_workspace": "添加工作区",
     "open_in_vscode": "用 VS Code 打开",
     "open_in_vscode_short": "VS Code",
+    "open_in_explorer": "在资源管理器中打开",
     "view_sessions": "查看会话列表",
     "remove": "移除",
     "open": "打开",
@@ -99,6 +100,7 @@
     "select_workspace_and_tool": "请先选择工作区和工具",
     "launched_in": "已在 {name} 启动 {tool}",
     "opened_in_vscode": "已用 VS Code 打开 {name}",
+    "opened_in_explorer": "已在资源管理器中打开 {name}",
     "read_session_records": "已读取 {count} 条会话记录",
     "no_session_records": "当前工具未返回会话记录",
     "session_opened": "已打开会话：{title}"

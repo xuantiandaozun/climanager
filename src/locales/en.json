@@ -33,6 +33,7 @@
     "add_workspace": "Add Workspace",
     "open_in_vscode": "Open in VS Code",
     "open_in_vscode_short": "VS Code",
+    "open_in_explorer": "Open in Explorer",
     "view_sessions": "View Sessions",
     "remove": "Remove",
     "open": "Open",
@@ -99,6 +100,7 @@
     "select_workspace_and_tool": "Select a workspace and tool first",
     "launched_in": "Launched {tool} in {name}",
     "opened_in_vscode": "Opened {name} in VS Code",
+    "opened_in_explorer": "Opened {name} in Explorer",
     "read_session_records": "Read {count} session records",
     "no_session_records": "No session records returned",
     "session_opened": "Opened session: {title}"

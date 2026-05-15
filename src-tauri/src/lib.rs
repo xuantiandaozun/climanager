@@ -2,11 +2,12 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuEvent, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -1118,11 +1119,70 @@ fn open_in_vscode(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn open_in_explorer(id: i64, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let db = state.db.lock().map_err(|err| err.to_string())?;
+    let workspace = read_workspace(&db, id)?;
+    drop(db);
+
+    #[cfg(windows)]
+    Command::new("explorer")
+        .arg(&workspace.path)
+        .spawn()
+        .map_err(|err| format!("打开资源管理器失败: {err}"))?;
+
+    #[cfg(target_os = "macos")]
+    Command::new("open")
+        .arg(&workspace.path)
+        .spawn()
+        .map_err(|err| format!("打开 Finder 失败: {err}"))?;
+
+    #[cfg(target_os = "linux")]
+    Command::new("xdg-open")
+        .arg(&workspace.path)
+        .spawn()
+        .map_err(|err| format!("打开文件管理器失败: {err}"))?;
+
+    Ok(())
+}
+
+const SINGLE_INSTANCE_PORT: u16 = 14210;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, SINGLE_INSTANCE_PORT);
+    let listener = match TcpListener::bind(addr) {
+        Ok(l) => Some(l),
+        Err(_) => {
+            for _ in 0..10 {
+                if let Ok(mut stream) = TcpStream::connect(addr) {
+                    let _ = stream.write_all(b"show");
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            std::process::exit(0);
+        }
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .setup(move |app| {
+            if let Some(listener) = listener {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    for mut stream in listener.incoming().flatten() {
+                        let mut buf = [0u8; 4];
+                        if stream.read_exact(&mut buf).is_ok() && &buf == b"show" {
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
+                });
+            }
+
             let db = init_database(app.handle())?;
             app.manage(AppState { db: Mutex::new(db) });
 
@@ -1177,6 +1237,7 @@ pub fn run() {
             add_workspace,
             delete_workspace,
             open_workspace_in_vscode,
+            open_in_explorer,
             list_tools,
             get_proxy_config,
             save_proxy_config,
