@@ -1126,10 +1126,13 @@ fn open_in_explorer(id: i64, state: tauri::State<'_, AppState>) -> Result<(), St
     drop(db);
 
     #[cfg(windows)]
-    Command::new("explorer")
-        .arg(&workspace.path)
-        .spawn()
-        .map_err(|err| format!("打开资源管理器失败: {err}"))?;
+    {
+        let win_path = workspace.path.replace('/', "\\");
+        Command::new("explorer")
+            .arg(&win_path)
+            .spawn()
+            .map_err(|err| format!("打开资源管理器失败: {err}"))?;
+    }
 
     #[cfg(target_os = "macos")]
     Command::new("open")
