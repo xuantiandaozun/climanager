@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: pnpm install
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: CLI Manager ${{ github.ref_name }}
+          releaseBody: |
+            ## CLI Manager ${{ github.ref_name }}
+
+            ### 下载
+            - **MSI 安装包**: `CLI-Manager_${{ github.ref_name }}_x64_zh-CN.msi`
+            - **NSIS 安装程序**: `CLI-Manager_${{ github.ref_name }}_x64-setup.exe`
+            - **MSIX 包**: `CLI-Manager_${{ github.ref_name }}_x64.msix`
+
+            ### 安装说明
+            - **MSI**: 双击运行，适合企业部署
+            - **NSIS**: 双击运行，个人用户推荐
+            - **MSIX**: Windows 应用包格式
+          releaseDraft: true
+          prerelease: false
