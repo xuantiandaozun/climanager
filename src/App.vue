@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const { t, locale } = useI18n()
@@ -20,7 +20,15 @@ type Workspace = {
   path: string
   created_at: string
   last_opened_at: string | null
+  favorite: boolean
+  group_name: string
+  archived: boolean
+  default_tool_id: number | null
 }
+
+type WorkspaceView = 'all' | 'recent' | 'favorites' | 'archived'
+
+const workspaceViews: WorkspaceView[] = ['all', 'recent', 'favorites', 'archived']
 
 type LaunchRecord = {
   id: number
@@ -70,13 +78,21 @@ const workspaces = ref<Workspace[]>([])
 const tools = ref<Tool[]>([])
 const history = ref<LaunchRecord[]>([])
 const sessions = ref<SessionRecord[]>([])
-const toolSessions = ref<ToolSessionList | null>(null)
 const proxy = ref<ProxyConfig>({ enabled: false, host: '127.0.0.1', port: '7890' })
 const selectedWorkspaceId = ref<number | null>(null)
 const selectedToolId = ref<number | null>(null)
+const workspaceSearch = ref('')
+const workspaceView = ref<WorkspaceView>('all')
+const workspaceGroupFilter = ref('all')
+const editingWorkspace = ref<Workspace | null>(null)
+const workspaceNameDraft = ref('')
+const workspaceGroupDraft = ref('')
+const sessionModalWorkspace = ref<Workspace | null>(null)
+const modalToolSessions = ref<ToolSessionList | null>(null)
+const modalSelectedToolId = ref<number | null>(null)
+const isLoadingModalSessions = ref(false)
 const statusMessage = ref('')
 const isBusy = ref(false)
-const isLoadingToolSessions = ref(false)
 const currentPage = ref<PageId>('overview')
 
 const navPages: { id: PageId }[] = [
@@ -101,9 +117,125 @@ const proxyPreview = computed(() => {
   return `http://${proxy.value.host}:${proxy.value.port}`
 })
 
+const normalizedWorkspaceSearch = computed(() => workspaceSearch.value.trim().toLowerCase())
+
+const activeWorkspaces = computed(() => workspaces.value.filter((workspace) => !workspace.archived))
+
+const archivedWorkspaces = computed(() => workspaces.value.filter((workspace) => workspace.archived))
+
+const recentWorkspaces = computed(() =>
+  [...activeWorkspaces.value]
+    .sort((left, right) => workspaceSortValue(right) - workspaceSortValue(left))
+    .slice(0, 6),
+)
+
+const workspaceViewCounts = computed(() => ({
+  all: activeWorkspaces.value.length,
+  recent: Math.min(activeWorkspaces.value.length, 12),
+  favorites: activeWorkspaces.value.filter((workspace) => workspace.favorite).length,
+  archived: archivedWorkspaces.value.length,
+}))
+
+const workspaceBaseList = computed(() => {
+  if (workspaceView.value === 'archived') return archivedWorkspaces.value
+  if (workspaceView.value === 'favorites') return activeWorkspaces.value.filter((workspace) => workspace.favorite)
+  if (workspaceView.value === 'recent') {
+    return [...activeWorkspaces.value]
+      .sort((left, right) => workspaceSortValue(right) - workspaceSortValue(left))
+      .slice(0, 12)
+  }
+
+  return activeWorkspaces.value
+})
+
+const workspaceGroupOptions = computed(() => {
+  const groups = new Set<string>()
+  for (const workspace of workspaceBaseList.value) {
+    groups.add(workspace.group_name.trim())
+  }
+
+  return Array.from(groups)
+    .sort((left, right) => left.localeCompare(right))
+    .map((group) => ({ value: group, label: workspaceGroupLabel(group) }))
+})
+
+const visibleWorkspaces = computed(() => {
+  let items = [...workspaceBaseList.value]
+
+  if (workspaceGroupFilter.value !== 'all') {
+    items = items.filter((workspace) => workspace.group_name.trim() === workspaceGroupFilter.value)
+  }
+
+  if (normalizedWorkspaceSearch.value) {
+    items = items.filter((workspace) => {
+      const haystack = `${workspace.name} ${workspace.path}`.toLowerCase()
+      return haystack.includes(normalizedWorkspaceSearch.value)
+    })
+  }
+
+  return items
+})
+
+const groupedVisibleWorkspaces = computed(() => {
+  const groups = new Map<string, Workspace[]>()
+
+  for (const workspace of visibleWorkspaces.value) {
+    const key = workspace.group_name.trim()
+    const current = groups.get(key) ?? []
+    current.push(workspace)
+    groups.set(key, current)
+  }
+
+  return Array.from(groups.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([groupName, items]) => ({
+      key: groupName || '__ungrouped__',
+      label: workspaceGroupLabel(groupName),
+      items,
+    }))
+})
+
+const groupTabList = computed(() => {
+  const groups = new Set<string>()
+  for (const workspace of workspaceBaseList.value) {
+    groups.add(workspace.group_name.trim())
+  }
+  const sorted = Array.from(groups).sort((a, b) => a.localeCompare(b))
+  return [
+    { value: 'all', label: t('workspaces.all_groups'), count: workspaceBaseList.value.length },
+    ...sorted.map((g) => ({
+      value: g,
+      label: workspaceGroupLabel(g),
+      count: workspaceBaseList.value.filter((w) => w.group_name.trim() === g).length,
+    })),
+  ]
+})
+
 onMounted(() => {
   statusMessage.value = t('status.ready')
   void refreshAll()
+})
+
+watch(editingWorkspace, (workspace) => {
+  workspaceNameDraft.value = workspace?.name ?? ''
+  workspaceGroupDraft.value = workspace?.group_name ?? ''
+}, { immediate: true })
+
+watch(workspaceGroupOptions, (options) => {
+  if (workspaceGroupFilter.value === 'all') return
+  if (!options.some((option) => option.value === workspaceGroupFilter.value)) {
+    workspaceGroupFilter.value = 'all'
+  }
+}, { immediate: true })
+
+watch(currentPage, async (page) => {
+  if (page === 'workspaces') {
+    try {
+      workspaces.value = await invoke<Workspace[]>('list_workspaces')
+    } catch (error) {
+      statusMessage.value = readableError(error)
+    }
+  }
 })
 
 function switchLang(lang: string) {
@@ -128,8 +260,12 @@ async function refreshAll() {
     proxy.value = proxyResult
     history.value = historyResult
     sessions.value = sessionResult
-    selectedWorkspaceId.value ??= workspaces.value[0]?.id ?? null
-    selectedToolId.value ??= tools.value[0]?.id ?? null
+    if (!workspaces.value.some((workspace) => workspace.id === selectedWorkspaceId.value)) {
+      selectedWorkspaceId.value = workspaces.value[0]?.id ?? null
+    }
+    if (!tools.value.some((tool) => tool.id === selectedToolId.value)) {
+      selectedToolId.value = tools.value[0]?.id ?? null
+    }
     statusMessage.value = t('status.synced')
   } catch (error) {
     statusMessage.value = readableError(error)
@@ -161,7 +297,10 @@ async function addWorkspace() {
     workspaces.value = await invoke<Workspace[]>('add_workspace', {
       input: { path: selected },
     })
-    selectedWorkspaceId.value = workspaces.value[0]?.id ?? null
+    selectedWorkspaceId.value =
+      workspaces.value.find((workspace) => workspace.path.toLowerCase() === selected.replaceAll('\\', '/').toLowerCase())?.id ??
+      workspaces.value[0]?.id ??
+      null
     statusMessage.value = t('status.workspace_saved')
   } catch (error) {
     statusMessage.value = readableError(error)
@@ -178,6 +317,63 @@ async function removeWorkspace(workspace: Workspace) {
       selectedWorkspaceId.value = workspaces.value[0]?.id ?? null
     }
     statusMessage.value = t('status.workspace_removed', { name: workspace.name })
+  } catch (error) {
+    statusMessage.value = readableError(error)
+  } finally {
+    isBusy.value = false
+  }
+}
+
+async function toggleWorkspaceFavorite(workspace: Workspace) {
+  isBusy.value = true
+  try {
+    workspaces.value = await invoke<Workspace[]>('toggle_workspace_favorite', { id: workspace.id })
+    statusMessage.value = workspace.favorite
+      ? t('status.workspace_unfavorited', { name: workspace.name })
+      : t('status.workspace_favorited', { name: workspace.name })
+  } catch (error) {
+    statusMessage.value = readableError(error)
+  } finally {
+    isBusy.value = false
+  }
+}
+
+async function toggleWorkspaceArchived(workspace: Workspace) {
+  isBusy.value = true
+  try {
+    workspaces.value = await invoke<Workspace[]>('toggle_workspace_archived', { id: workspace.id })
+    statusMessage.value = workspace.archived
+      ? t('status.workspace_unarchived', { name: workspace.name })
+      : t('status.workspace_archived', { name: workspace.name })
+  } catch (error) {
+    statusMessage.value = readableError(error)
+  } finally {
+    isBusy.value = false
+  }
+}
+
+function openEditModal(workspace: Workspace) {
+  editingWorkspace.value = workspace
+}
+
+function closeEditModal() {
+  editingWorkspace.value = null
+}
+
+async function saveWorkspaceDetails() {
+  if (!editingWorkspace.value) return
+
+  isBusy.value = true
+  try {
+    workspaces.value = await invoke<Workspace[]>('update_workspace', {
+      input: {
+        id: editingWorkspace.value.id,
+        name: workspaceNameDraft.value,
+        group_name: workspaceGroupDraft.value,
+      },
+    })
+    statusMessage.value = t('status.workspace_updated', { name: workspaceNameDraft.value.trim() || editingWorkspace.value.name })
+    closeEditModal()
   } catch (error) {
     statusMessage.value = readableError(error)
   } finally {
@@ -242,7 +438,6 @@ async function launchSelected() {
       name: selectedWorkspace.value.name,
       tool: selectedTool.value.name,
     })
-    await refreshAll()
   } catch (error) {
     statusMessage.value = readableError(error)
   } finally {
@@ -250,32 +445,96 @@ async function launchSelected() {
   }
 }
 
-async function loadToolSessions() {
-  if (!selectedWorkspace.value || !selectedTool.value) {
+async function launchWorkspace(workspace: Workspace) {
+  const toolId = workspace.default_tool_id ?? selectedToolId.value
+  if (!toolId) {
     statusMessage.value = t('status.select_workspace_and_tool')
     return
   }
 
-  isLoadingToolSessions.value = true
+  isBusy.value = true
   try {
-    toolSessions.value = await invoke<ToolSessionList>('list_tool_sessions', {
+    history.value = await invoke<LaunchRecord[]>('launch_tool', {
       input: {
-        workspace_id: selectedWorkspace.value.id,
-        tool_id: selectedTool.value.id,
+        workspace_id: workspace.id,
+        tool_id: toolId,
       },
     })
-    statusMessage.value = toolSessions.value.lines.length
-      ? t('status.read_session_records', { count: toolSessions.value.lines.length })
+    const tool = tools.value.find((t) => t.id === toolId)
+    statusMessage.value = t('status.launched_in', {
+      name: workspace.name,
+      tool: tool?.name ?? '',
+    })
+  } catch (error) {
+    statusMessage.value = readableError(error)
+  } finally {
+    isBusy.value = false
+  }
+}
+
+async function setWorkspaceDefaultTool(workspace: Workspace, toolId: number | null) {
+  isBusy.value = true
+  try {
+    workspaces.value = await invoke<Workspace[]>('set_workspace_default_tool', {
+      workspaceId: workspace.id,
+      toolId,
+    })
+    if (toolId === null) {
+      statusMessage.value = t('status.workspace_tool_cleared', { name: workspace.name })
+    } else {
+      const tool = tools.value.find((t) => t.id === toolId)
+      statusMessage.value = t('status.workspace_tool_set', { name: workspace.name, tool: tool?.name ?? toolId })
+    }
+  } catch (error) {
+    statusMessage.value = readableError(error)
+  } finally {
+    isBusy.value = false
+  }
+}
+
+function openSessionModal(workspace: Workspace) {
+  sessionModalWorkspace.value = workspace
+  modalSelectedToolId.value = workspace.default_tool_id ?? selectedToolId.value
+  modalToolSessions.value = null
+  loadModalToolSessions()
+}
+
+function closeSessionModal() {
+  sessionModalWorkspace.value = null
+  modalToolSessions.value = null
+  modalSelectedToolId.value = null
+}
+
+async function loadModalToolSessions() {
+  const workspace = sessionModalWorkspace.value
+  const toolId = modalSelectedToolId.value
+  if (!workspace || !toolId) {
+    statusMessage.value = t('status.select_workspace_and_tool')
+    return
+  }
+
+  isLoadingModalSessions.value = true
+  try {
+    modalToolSessions.value = await invoke<ToolSessionList>('list_tool_sessions', {
+      input: {
+        workspace_id: workspace.id,
+        tool_id: toolId,
+      },
+    })
+    statusMessage.value = modalToolSessions.value.lines.length
+      ? t('status.read_session_records', { count: modalToolSessions.value.lines.length })
       : t('status.no_session_records')
   } catch (error) {
     statusMessage.value = readableError(error)
   } finally {
-    isLoadingToolSessions.value = false
+    isLoadingModalSessions.value = false
   }
 }
 
-async function openToolSession(session: ToolSessionItem) {
-  if (!selectedWorkspace.value || !selectedTool.value) {
+async function openModalToolSession(session: ToolSessionItem) {
+  const workspace = sessionModalWorkspace.value
+  const toolId = modalSelectedToolId.value
+  if (!workspace || !toolId) {
     statusMessage.value = t('status.select_workspace_and_tool')
     return
   }
@@ -284,8 +543,8 @@ async function openToolSession(session: ToolSessionItem) {
   try {
     await invoke('open_tool_session', {
       input: {
-        workspace_id: selectedWorkspace.value.id,
-        tool_id: selectedTool.value.id,
+        workspace_id: workspace.id,
+        tool_id: toolId,
         session_id: session.id,
       },
     })
@@ -305,6 +564,22 @@ function formatTime(value: string | null) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value))
+}
+
+function workspaceSortValue(workspace: Workspace) {
+  return Date.parse(workspace.last_opened_at ?? workspace.created_at) || 0
+}
+
+function workspaceFavoriteLabel(workspace: Workspace) {
+  return workspace.favorite ? t('button.unfavorite') : t('button.favorite')
+}
+
+function workspaceArchiveLabel(workspace: Workspace) {
+  return workspace.archived ? t('button.unarchive') : t('button.archive')
+}
+
+function workspaceGroupLabel(groupName: string) {
+  return groupName.trim() || t('workspaces.ungrouped_group')
 }
 
 function readableError(error: unknown) {
@@ -390,56 +665,70 @@ function readableError(error: unknown) {
         </div>
 
         <section class="panel launch-panel">
-          <div class="panel-heading">
+          <div class="panel-heading compact">
             <div>
               <p class="eyebrow">{{ $t('launch.quick_launch') }}</p>
               <h2>{{ $t('launch.quick_launch') }}</h2>
             </div>
-            <div class="hero-actions">
-              <button class="ghost" :disabled="isBusy || !selectedWorkspace" @click="selectedWorkspace && openWorkspaceInVSCode(selectedWorkspace)">{{ $t('button.open_in_vscode') }}</button>
-              <button class="primary" :disabled="isBusy" @click="launchSelected">{{ $t('button.launch_selected') }}</button>
-            </div>
           </div>
-          <div class="selection-summary">
-            <div class="choice-panel">
-              <div class="choice-heading">
-                <span>{{ $t('launch.current_workspace') }}</span>
-                <strong>{{ selectedWorkspace?.name ?? $t('launch.not_selected') }}</strong>
-              </div>
-              <div v-if="workspaces.length" class="choice-list">
-                <button
-                  v-for="workspace in workspaces"
-                  :key="workspace.id"
-                  :class="['choice-row', { selected: workspace.id === selectedWorkspaceId }]"
-                  type="button"
-                  @click="selectedWorkspaceId = workspace.id"
-                >
-                  <span>{{ workspace.name }}</span>
-                  <small>{{ workspace.path }}</small>
-                </button>
-              </div>
-              <p v-else>{{ $t('launch.no_workspaces_hint') }}</p>
+
+          <div class="launch-workspace-section">
+            <div class="choice-heading">
+              <span>{{ $t('launch.current_workspace') }}</span>
+              <strong>{{ selectedWorkspace?.name ?? $t('launch.not_selected') }}</strong>
             </div>
-            <div class="choice-panel">
-              <div class="choice-heading">
-                <span>{{ $t('launch.current_tool') }}</span>
-                <strong>{{ selectedTool?.name ?? $t('launch.not_selected') }}</strong>
-              </div>
-              <div v-if="tools.length" class="choice-list">
-                <button
-                  v-for="tool in tools"
-                  :key="tool.id"
-                  :class="['choice-row', { selected: tool.id === selectedToolId }]"
-                  type="button"
-                  @click="selectedToolId = tool.id"
-                >
-                  <span>{{ tool.name }}</span>
-                  <small>{{ tool.command }}</small>
-                </button>
-              </div>
-              <p v-else>{{ $t('launch.no_tools_hint') }}</p>
+            <div v-if="recentWorkspaces.length" class="workspace-grid">
+              <article
+                v-for="workspace in recentWorkspaces"
+                :key="workspace.id"
+                :class="['workspace-card', { selected: workspace.id === selectedWorkspaceId }]"
+                @click="selectedWorkspaceId = workspace.id; if (workspace.default_tool_id) selectedToolId = workspace.default_tool_id"
+              >
+                <div class="workspace-topline">
+                  <div class="workspace-topline-left">
+                    <span class="folder-dot"></span>
+                    <span v-if="workspace.favorite" class="workspace-badge">{{ $t('workspaces.favorite_badge') }}</span>
+                  </div>
+                  <span>{{ formatTime(workspace.last_opened_at) }}</span>
+                </div>
+                <h3>{{ workspace.name }}</h3>
+                <p>{{ workspace.path }}</p>
+                <div class="workspace-default-tool" @click.stop>
+                  <label class="workspace-tool-label">{{ $t('workspaces.default_tool_label') }}</label>
+                  <select
+                    class="workspace-tool-select"
+                    :value="workspace.default_tool_id ?? ''"
+                    :disabled="isBusy"
+                    @change="setWorkspaceDefaultTool(workspace, ($event.target as HTMLSelectElement).value ? Number(($event.target as HTMLSelectElement).value) : null)"
+                  >
+                    <option value="">{{ $t('workspaces.default_tool_none') }}</option>
+                    <option v-for="tool in tools" :key="tool.id" :value="tool.id">
+                      {{ tool.name }}
+                    </option>
+                  </select>
+                </div>
+                <div class="workspace-meta">
+                  <div class="workspace-actions">
+                    <button class="mini-button primary" :disabled="isBusy" @click.stop="launchWorkspace(workspace)">
+                      {{ $t('button.launch') }}
+                    </button>
+                    <button class="mini-button" :disabled="isBusy" @click.stop="openSessionModal(workspace)">
+                      {{ $t('button.view_sessions') }}
+                    </button>
+                    <button class="mini-button" :disabled="isBusy" @click.stop="openWorkspaceInVSCode(workspace)">
+                      {{ $t('button.open_in_vscode_short') }}
+                    </button>
+                    <button class="mini-button" :disabled="isBusy" @click.stop="openInExplorer(workspace)">
+                      {{ $t('button.open_in_explorer') }}
+                    </button>
+                  </div>
+                </div>
+              </article>
             </div>
+            <p v-else>{{ $t('launch.no_workspaces_hint') }}</p>
           </div>
+
+
         </section>
       </section>
 
@@ -459,93 +748,126 @@ function readableError(error: unknown) {
               >
                 {{ $t('button.open_in_vscode') }}
               </button>
-              <button class="ghost" :disabled="isLoadingToolSessions" @click="loadToolSessions">
+              <button class="ghost" :disabled="!selectedWorkspace" @click="selectedWorkspace && openSessionModal(selectedWorkspace)">
                 {{ $t('button.view_sessions') }}
               </button>
+              <select
+                v-if="tools.length"
+                class="tool-inline-select"
+                :value="selectedToolId ?? ''"
+                @change="selectedToolId = Number(($event.target as HTMLSelectElement).value) || null"
+              >
+                <option v-for="tool in tools" :key="tool.id" :value="tool.id">
+                  {{ tool.name }}{{ tool.detected_path ? '' : ' ⚠' }}
+                </option>
+              </select>
               <button class="primary" :disabled="isBusy" @click="launchSelected">{{ $t('button.launch_selected') }}</button>
             </div>
           </div>
 
-          <div v-if="workspaces.length" class="workspace-grid">
-            <article
-              v-for="workspace in workspaces"
-              :key="workspace.id"
-              :class="['workspace-card', { selected: workspace.id === selectedWorkspaceId }]"
-              @click="selectedWorkspaceId = workspace.id"
-            >
-              <div class="workspace-topline">
-                <span class="folder-dot"></span>
-                <span>{{ formatTime(workspace.last_opened_at) }}</span>
-              </div>
-              <h3>{{ workspace.name }}</h3>
-              <p>{{ workspace.path }}</p>
-              <div class="workspace-meta">
-                <span>ID {{ workspace.id }}</span>
-                <div class="workspace-actions">
-                  <button class="mini-button" :disabled="isBusy" @click.stop="openWorkspaceInVSCode(workspace)">
-                    {{ $t('button.open_in_vscode_short') }}
-                  </button>
-                  <button class="mini-button" :disabled="isBusy" @click.stop="openInExplorer(workspace)">
-                    {{ $t('button.open_in_explorer') }}
-                  </button>
-                  <button class="mini-button" :disabled="isBusy" @click.stop="removeWorkspace(workspace)">
-                    {{ $t('button.remove') }}
-                  </button>
-                </div>
-              </div>
-            </article>
-          </div>
-
-          <div v-else class="empty-state">
-            <strong>{{ $t('workspaces.no_workspaces_title') }}</strong>
-            <p>{{ $t('workspaces.no_workspaces_hint') }}</p>
-          </div>
-        </section>
-
-        <section class="panel recent-message-panel">
-          <div class="panel-heading compact">
-            <div>
-              <p class="eyebrow">{{ $t('workspaces.session_list') }}</p>
-              <h2>{{ $t('workspaces.session_list') }}</h2>
-              <p class="panel-note">
-                {{ $t('workspaces.current_query', { workspace: selectedWorkspace?.name ?? $t('launch.not_selected'), tool: selectedTool?.name ?? $t('launch.not_selected') }) }}
-              </p>
+          <div class="workspace-toolbar">
+            <div class="view-switcher" role="tablist" aria-label="Workspace views">
+              <button
+                v-for="view in workspaceViews"
+                :key="view"
+                :class="['view-chip', { selected: workspaceView === view }]"
+                type="button"
+                @click="workspaceView = view"
+              >
+                <span>{{ $t(`workspaces.${view}_tab`) }}</span>
+                <small>{{ workspaceViewCounts[view] }}</small>
+              </button>
             </div>
-            <button class="text-button" :disabled="isLoadingToolSessions" @click="loadToolSessions">
-              {{ isLoadingToolSessions ? $t('button.querying') : $t('button.requery') }}
+
+            <label class="workspace-search">
+              <span>{{ $t('workspaces.search_label') }}</span>
+              <input v-model="workspaceSearch" type="text" :placeholder="$t('workspaces.search_placeholder')" />
+            </label>
+
+          </div>
+
+          <div class="group-tabs" role="tablist" aria-label="Workspace groups">
+            <button
+              v-for="tab in groupTabList"
+              :key="tab.value || '__ungrouped__'"
+              :class="['group-tab', { selected: workspaceGroupFilter === tab.value }]"
+              type="button"
+              @click="workspaceGroupFilter = tab.value"
+            >
+              <span>{{ tab.label }}</span>
+              <small>{{ tab.count }}</small>
             </button>
           </div>
 
-          <div v-if="toolSessions" class="recent-message-list">
-            <div class="command-output-heading">
-              <span>{{ $t('workspaces.executed_command') }}</span>
-              <code>{{ toolSessions.command }}</code>
-            </div>
+          <p class="workspace-results" v-if="workspaces.length">
+            {{ $t('workspaces.results_count', { count: visibleWorkspaces.length }) }}
+          </p>
 
-            <article v-if="toolSessions.sessions.length" class="session-command-list">
-              <div v-for="session in toolSessions.sessions" :key="session.id" class="session-command-row session-item-row">
-                <div>
-                  <strong>{{ session.title }}</strong>
-                  <small>{{ session.id }} · {{ session.updated }}</small>
-                </div>
-                <button class="mini-button" :disabled="isBusy" @click="openToolSession(session)">{{ $t('button.open') }}</button>
-              </div>
-            </article>
-
-            <article v-else-if="toolSessions.lines.length" class="session-command-list">
-              <div v-for="line in toolSessions.lines" :key="line" class="session-command-row">
-                {{ line }}
-              </div>
-            </article>
-
-            <article v-else class="recent-message-card">
-              <pre>{{ toolSessions.output || toolSessions.stderr || $t('workspaces.no_output') }}</pre>
-            </article>
+          <div v-if="visibleWorkspaces.length" class="workspace-grid">
+                <article
+                  v-for="workspace in visibleWorkspaces"
+                  :key="workspace.id"
+                  :class="['workspace-card', { selected: workspace.id === selectedWorkspaceId, archived: workspace.archived }]"
+                  @click="selectedWorkspaceId = workspace.id; if (workspace.default_tool_id) selectedToolId = workspace.default_tool_id"
+                >
+                  <div class="workspace-topline">
+                    <div class="workspace-topline-left">
+                      <span class="folder-dot"></span>
+                      <span v-if="workspace.favorite" class="workspace-badge">{{ $t('workspaces.favorite_badge') }}</span>
+                      <span v-if="workspace.archived" class="workspace-badge muted">{{ $t('workspaces.archived_badge') }}</span>
+                    </div>
+                    <span>{{ formatTime(workspace.last_opened_at) }}</span>
+                  </div>
+                  <h3>{{ workspace.name }}</h3>
+                  <p>{{ workspace.path }}</p>
+                  <div class="workspace-default-tool" @click.stop>
+                    <label class="workspace-tool-label">{{ $t('workspaces.default_tool_label') }}</label>
+                    <select
+                      class="workspace-tool-select"
+                      :value="workspace.default_tool_id ?? ''"
+                      :disabled="isBusy"
+                      @change="setWorkspaceDefaultTool(workspace, ($event.target as HTMLSelectElement).value ? Number(($event.target as HTMLSelectElement).value) : null)"
+                    >
+                      <option value="">{{ $t('workspaces.default_tool_none') }}</option>
+                      <option v-for="tool in tools" :key="tool.id" :value="tool.id">
+                        {{ tool.name }}
+                      </option>
+                    </select>
+                  </div>
+                  <div class="workspace-meta">
+                    <div class="workspace-actions">
+                      <button class="mini-button primary" :disabled="isBusy" @click.stop="launchWorkspace(workspace)">
+                        {{ $t('button.launch') }}
+                      </button>
+                      <button class="mini-button" :disabled="isBusy" @click.stop="openSessionModal(workspace)">
+                        {{ $t('button.view_sessions') }}
+                      </button>
+                      <button class="mini-button" :disabled="isBusy" @click.stop="openEditModal(workspace)">
+                        {{ $t('button.edit') }}
+                      </button>
+                      <button class="mini-button" :disabled="isBusy" @click.stop="toggleWorkspaceFavorite(workspace)">
+                        {{ workspaceFavoriteLabel(workspace) }}
+                      </button>
+                      <button class="mini-button" :disabled="isBusy" @click.stop="toggleWorkspaceArchived(workspace)">
+                        {{ workspaceArchiveLabel(workspace) }}
+                      </button>
+                      <button class="mini-button" :disabled="isBusy" @click.stop="openWorkspaceInVSCode(workspace)">
+                        {{ $t('button.open_in_vscode_short') }}
+                      </button>
+                      <button class="mini-button" :disabled="isBusy" @click.stop="openInExplorer(workspace)">
+                        {{ $t('button.open_in_explorer') }}
+                      </button>
+                      <button class="mini-button" :disabled="isBusy" @click.stop="removeWorkspace(workspace)">
+                        {{ $t('button.remove') }}
+                      </button>
+                    </div>
+                  </div>
+                </article>
           </div>
 
-          <div v-else class="empty-state compact-empty">
-            <strong>{{ $t('workspaces.no_sessions_title') }}</strong>
-            <p>{{ $t('workspaces.no_sessions_hint') }}</p>
+          <div v-else class="empty-state">
+            <strong>{{ workspaces.length ? $t('workspaces.no_filtered_title') : $t('workspaces.no_workspaces_title') }}</strong>
+            <p>{{ workspaces.length ? $t('workspaces.no_filtered_hint') : $t('workspaces.no_workspaces_hint') }}</p>
           </div>
         </section>
       </section>
@@ -656,5 +978,105 @@ function readableError(error: unknown) {
         </section>
       </section>
     </section>
+
+    <div v-if="editingWorkspace" class="modal-overlay" @click.self="closeEditModal">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">{{ $t('workspaces.editor_title') }}</p>
+            <h2>{{ editingWorkspace.name }}</h2>
+            <p class="panel-note">{{ editingWorkspace.path }}</p>
+          </div>
+          <button class="modal-close" type="button" @click="closeEditModal">&times;</button>
+        </div>
+
+        <form class="workspace-form" @submit.prevent="saveWorkspaceDetails">
+          <label>
+            <span>{{ $t('workspaces.name_label') }}</span>
+            <input v-model="workspaceNameDraft" type="text" :placeholder="$t('workspaces.name_placeholder')" />
+          </label>
+          <label>
+            <span>{{ $t('workspaces.group_label') }}</span>
+            <input v-model="workspaceGroupDraft" type="text" :placeholder="$t('workspaces.group_placeholder')" />
+          </label>
+          <div class="workspace-form-meta">
+            <span>{{ editingWorkspace.archived ? $t('workspaces.archived_badge') : $t('workspaces.active_badge') }}</span>
+            <span>{{ workspaceGroupLabel(editingWorkspace.group_name) }}</span>
+          </div>
+          <div class="panel-actions">
+            <button class="primary" :disabled="isBusy">{{ $t('button.save_workspace') }}</button>
+            <button class="ghost" type="button" :disabled="isBusy" @click="closeEditModal">
+              {{ $t('button.cancel') }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div v-if="sessionModalWorkspace" class="modal-overlay" @click.self="closeSessionModal">
+      <div class="modal-dialog modal-dialog-wide">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">{{ $t('workspaces.session_list') }}</p>
+            <h2>{{ sessionModalWorkspace.name }}</h2>
+            <p class="panel-note">{{ sessionModalWorkspace.path }}</p>
+          </div>
+          <button class="modal-close" type="button" @click="closeSessionModal">&times;</button>
+        </div>
+
+        <div class="session-modal-toolbar">
+          <div class="session-modal-tool-select">
+            <label>{{ $t('workspaces.tool_selector') }}</label>
+            <select
+              :value="modalSelectedToolId ?? ''"
+              :disabled="isLoadingModalSessions"
+              @change="modalSelectedToolId = ($event.target as HTMLSelectElement).value ? Number(($event.target as HTMLSelectElement).value) : null; loadModalToolSessions()"
+            >
+              <option value="">{{ $t('workspaces.default_tool_none') }}</option>
+              <option v-for="tool in tools" :key="tool.id" :value="tool.id">{{ tool.name }}</option>
+            </select>
+          </div>
+          <button class="text-button" :disabled="isLoadingModalSessions || !modalSelectedToolId" @click="loadModalToolSessions">
+            {{ isLoadingModalSessions ? $t('button.querying') : $t('button.requery') }}
+          </button>
+        </div>
+
+        <div v-if="modalToolSessions" class="session-modal-body">
+          <div class="command-output-heading">
+            <span>{{ $t('workspaces.executed_command') }}</span>
+            <code>{{ modalToolSessions.command }}</code>
+          </div>
+
+          <article v-if="modalToolSessions.sessions.length" class="session-command-list">
+            <div v-for="session in modalToolSessions.sessions" :key="session.id" class="session-command-row session-item-row">
+              <div>
+                <strong>{{ session.title }}</strong>
+                <small>{{ session.id }} · {{ session.updated }}</small>
+              </div>
+              <button class="mini-button" :disabled="isBusy" @click="openModalToolSession(session)">{{ $t('button.open') }}</button>
+            </div>
+          </article>
+
+          <article v-else-if="modalToolSessions.lines.length" class="session-command-list">
+            <div v-for="line in modalToolSessions.lines" :key="line" class="session-command-row">
+              {{ line }}
+            </div>
+          </article>
+
+          <article v-else class="recent-message-card">
+            <pre>{{ modalToolSessions.output || modalToolSessions.stderr || $t('workspaces.no_output') }}</pre>
+          </article>
+        </div>
+
+        <div v-else-if="!isLoadingModalSessions" class="empty-state compact-empty">
+          <strong>{{ $t('workspaces.no_sessions_title') }}</strong>
+          <p>{{ $t('workspaces.modal_no_sessions_hint') }}</p>
+        </div>
+
+        <div v-else class="empty-state compact-empty">
+          <p>{{ $t('button.querying') }}</p>
+        </div>
+      </div>
+    </div>
   </main>
 </template>

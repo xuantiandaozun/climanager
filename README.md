@@ -8,13 +8,18 @@ It helps connect project folders, CLI launchers, proxy settings, launch history,
 
 ## Features
 
-- Manage project workspaces
+- Manage project workspaces with grouping, favorites, and archiving
+- Search and filter workspaces by name, path, or group
+- Set a default CLI tool per workspace
 - Launch CLI tools from a selected workspace directory
+- Quick launch from the overview with recent workspace cards
 - Detect whether built-in tools are available in `PATH`
 - Persist local data with SQLite
 - Record launch history
+- View session records in a modal dialog per workspace
 - Configure a proxy for launched terminal sessions
 - Index session files from common AI CLI history directories
+- Minimize to system tray
 - Keep all data local by default
 
 ## Supported Tools

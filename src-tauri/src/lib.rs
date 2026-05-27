@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
@@ -27,6 +27,10 @@ struct Workspace {
     path: String,
     created_at: String,
     last_opened_at: Option<String>,
+    favorite: bool,
+    group_name: String,
+    archived: bool,
+    default_tool_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -92,6 +96,13 @@ struct WorkspaceInput {
 }
 
 #[derive(Debug, Deserialize)]
+struct UpdateWorkspaceInput {
+    id: i64,
+    name: String,
+    group_name: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct LaunchInput {
     workspace_id: i64,
     tool_id: i64,
@@ -114,23 +125,14 @@ fn list_workspaces(state: tauri::State<'_, AppState>) -> Result<Vec<Workspace>, 
     let db = state.db.lock().map_err(|err| err.to_string())?;
     let mut stmt = db
         .prepare(
-            "select id, name, path, created_at, last_opened_at
+            "select id, name, path, created_at, last_opened_at, favorite, group_name, archived, default_tool_id
              from workspaces
-             order by coalesce(last_opened_at, created_at) desc",
+             order by archived asc, favorite desc, coalesce(last_opened_at, created_at) desc, lower(name) asc, id desc",
         )
         .map_err(|err| err.to_string())?;
 
     let rows = stmt
-        .query_map([], |row| {
-            let path: String = row.get(2)?;
-            Ok(Workspace {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                path: clean_path_prefix(&path),
-                created_at: row.get(3)?,
-                last_opened_at: row.get(4)?,
-            })
-        })
+        .query_map([], workspace_from_row)
         .map_err(|err| err.to_string())?;
 
     rows.collect::<Result<Vec<_>, _>>()
@@ -166,6 +168,75 @@ fn delete_workspace(state: tauri::State<'_, AppState>, id: i64) -> Result<Vec<Wo
     let db = state.db.lock().map_err(|err| err.to_string())?;
     db.execute("delete from workspaces where id = ?1", params![id])
         .map_err(|err| err.to_string())?;
+    drop(db);
+    list_workspaces(state)
+}
+
+#[tauri::command]
+fn update_workspace(
+    state: tauri::State<'_, AppState>,
+    input: UpdateWorkspaceInput,
+) -> Result<Vec<Workspace>, String> {
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err("工作区名称不能为空".to_string());
+    }
+
+    let group_name = input.group_name.trim();
+    let db = state.db.lock().map_err(|err| err.to_string())?;
+    let changed = db
+        .execute(
+            "update workspaces set name = ?1, group_name = ?2 where id = ?3",
+            params![name, group_name, input.id],
+        )
+        .map_err(|err| err.to_string())?;
+
+    if changed == 0 {
+        return Err("工作区不存在".to_string());
+    }
+
+    drop(db);
+    list_workspaces(state)
+}
+
+#[tauri::command]
+fn toggle_workspace_favorite(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+) -> Result<Vec<Workspace>, String> {
+    let db = state.db.lock().map_err(|err| err.to_string())?;
+    let changed = db
+        .execute(
+            "update workspaces set favorite = case favorite when 1 then 0 else 1 end where id = ?1",
+            params![id],
+        )
+        .map_err(|err| err.to_string())?;
+
+    if changed == 0 {
+        return Err("工作区不存在".to_string());
+    }
+
+    drop(db);
+    list_workspaces(state)
+}
+
+#[tauri::command]
+fn toggle_workspace_archived(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+) -> Result<Vec<Workspace>, String> {
+    let db = state.db.lock().map_err(|err| err.to_string())?;
+    let changed = db
+        .execute(
+            "update workspaces set archived = case archived when 1 then 0 else 1 end where id = ?1",
+            params![id],
+        )
+        .map_err(|err| err.to_string())?;
+
+    if changed == 0 {
+        return Err("工作区不存在".to_string());
+    }
+
     drop(db);
     list_workspaces(state)
 }
@@ -337,7 +408,7 @@ fn open_tool_session(
     drop(db);
 
     let command = tool_open_session_command(&tool.name, &tool.command, &input.session_id)?;
-    spawn_terminal(&workspace.path, &command, proxy_url.as_deref())
+    spawn_terminal(&workspace.path, &tool.name, &command, proxy_url.as_deref())
 }
 
 #[tauri::command]
@@ -348,18 +419,9 @@ fn launch_tool(
     let db = state.db.lock().map_err(|err| err.to_string())?;
     let workspace: Workspace = db
         .query_row(
-            "select id, name, path, created_at, last_opened_at from workspaces where id = ?1",
+            "select id, name, path, created_at, last_opened_at, favorite, group_name, archived, default_tool_id from workspaces where id = ?1",
             params![input.workspace_id],
-            |row| {
-                let path: String = row.get(2)?;
-                Ok(Workspace {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    path: clean_path_prefix(&path),
-                    created_at: row.get(3)?,
-                    last_opened_at: row.get(4)?,
-                })
-            },
+            workspace_from_row,
         )
         .map_err(|_| "工作区不存在".to_string())?;
 
@@ -386,7 +448,20 @@ fn launch_tool(
 
     let proxy = read_proxy_config(&db)?;
     let proxy_url = proxy_url(&proxy);
-    spawn_terminal(&workspace.path, &tool.command, proxy_url.as_deref())?;
+    let launch_command = if tool.name.to_lowercase().contains("codex") {
+        format!(
+            "{} --sandbox workspace-write --ask-for-approval on-request -c approvals_reviewer=auto_review",
+            tool.command.trim()
+        )
+    } else {
+        tool.command.clone()
+    };
+    spawn_terminal(
+        &workspace.path,
+        &tool.name,
+        &launch_command,
+        proxy_url.as_deref(),
+    )?;
 
     let now = Utc::now().to_rfc3339();
     db.execute(
@@ -427,7 +502,10 @@ fn init_database(app: &AppHandle) -> Result<Connection, String> {
             name text not null,
             path text not null unique,
             created_at text not null,
-            last_opened_at text
+            last_opened_at text,
+            favorite integer not null default 0,
+            group_name text not null default '',
+            archived integer not null default 0
         );
 
         create table if not exists tools (
@@ -469,8 +547,72 @@ fn init_database(app: &AppHandle) -> Result<Connection, String> {
     )
     .map_err(|err| err.to_string())?;
 
+    migrate_database(&db)?;
     seed_tools(&db)?;
     Ok(db)
+}
+
+fn migrate_database(db: &Connection) -> Result<(), String> {
+    let mut stmt = db
+        .prepare("pragma table_info(workspaces)")
+        .map_err(|err| err.to_string())?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|err| err.to_string())?;
+
+    let mut has_favorite = false;
+    let mut has_group_name = false;
+    let mut has_archived = false;
+    let mut has_default_tool_id = false;
+    for column in columns {
+        match column.map_err(|err| err.to_string())?.as_str() {
+            "favorite" => has_favorite = true,
+            "group_name" => has_group_name = true,
+            "archived" => has_archived = true,
+            "default_tool_id" => has_default_tool_id = true,
+            _ => {}
+        }
+    }
+
+    if !has_favorite {
+        db.execute(
+            "alter table workspaces add column favorite integer not null default 0",
+            [],
+        )
+        .map_err(|err| err.to_string())?;
+    }
+
+    if !has_group_name {
+        db.execute(
+            "alter table workspaces add column group_name text not null default ''",
+            [],
+        )
+        .map_err(|err| err.to_string())?;
+    }
+
+    if !has_archived {
+        db.execute(
+            "alter table workspaces add column archived integer not null default 0",
+            [],
+        )
+        .map_err(|err| err.to_string())?;
+    }
+
+    if !has_default_tool_id {
+        db.execute(
+            "alter table workspaces add column default_tool_id integer references tools(id) on delete set null",
+            [],
+        )
+        .map_err(|err| err.to_string())?;
+    }
+
+    db.execute(
+        "create index if not exists idx_workspaces_activity on workspaces(archived, favorite, last_opened_at, created_at)",
+        [],
+    )
+    .map_err(|err| err.to_string())?;
+
+    Ok(())
 }
 
 fn seed_tools(db: &Connection) -> Result<(), String> {
@@ -478,6 +620,7 @@ fn seed_tools(db: &Connection) -> Result<(), String> {
         ("opencode", "opencode"),
         ("codex", "codex"),
         ("claude code", "claude"),
+        ("antigravity cli", "agy"),
     ];
 
     for (name, command) in tools {
@@ -495,23 +638,14 @@ fn seed_tools(db: &Connection) -> Result<(), String> {
 fn read_workspaces(db: &Connection) -> Result<Vec<Workspace>, String> {
     let mut stmt = db
         .prepare(
-            "select id, name, path, created_at, last_opened_at
+            "select id, name, path, created_at, last_opened_at, favorite, group_name, archived, default_tool_id
              from workspaces
-             order by coalesce(last_opened_at, created_at) desc",
+             order by archived asc, favorite desc, coalesce(last_opened_at, created_at) desc, lower(name) asc, id desc",
         )
         .map_err(|err| err.to_string())?;
 
     let rows = stmt
-        .query_map([], |row| {
-            let path: String = row.get(2)?;
-            Ok(Workspace {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                path: clean_path_prefix(&path),
-                created_at: row.get(3)?,
-                last_opened_at: row.get(4)?,
-            })
-        })
+        .query_map([], workspace_from_row)
         .map_err(|err| err.to_string())?;
 
     rows.collect::<Result<Vec<_>, _>>()
@@ -520,20 +654,48 @@ fn read_workspaces(db: &Connection) -> Result<Vec<Workspace>, String> {
 
 fn read_workspace(db: &Connection, id: i64) -> Result<Workspace, String> {
     db.query_row(
-        "select id, name, path, created_at, last_opened_at from workspaces where id = ?1",
+        "select id, name, path, created_at, last_opened_at, favorite, group_name, archived, default_tool_id from workspaces where id = ?1",
         params![id],
-        |row| {
-            let path: String = row.get(2)?;
-            Ok(Workspace {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                path: clean_path_prefix(&path),
-                created_at: row.get(3)?,
-                last_opened_at: row.get(4)?,
-            })
-        },
+        workspace_from_row,
     )
     .map_err(|_| "工作区不存在".to_string())
+}
+
+fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<Workspace> {
+    let path: String = row.get(2)?;
+    Ok(Workspace {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        path: clean_path_prefix(&path),
+        created_at: row.get(3)?,
+        last_opened_at: row.get(4)?,
+        favorite: row.get::<_, i64>(5)? == 1,
+        group_name: row.get(6)?,
+        archived: row.get::<_, i64>(7)? == 1,
+        default_tool_id: row.get(8)?,
+    })
+}
+
+#[tauri::command]
+fn set_workspace_default_tool(
+    state: tauri::State<'_, AppState>,
+    workspace_id: i64,
+    tool_id: Option<i64>,
+) -> Result<Vec<Workspace>, String> {
+    let db = state.db.lock().map_err(|err| err.to_string())?;
+    let changed = db
+        .execute(
+            "update workspaces set default_tool_id = ?1 where id = ?2",
+            params![tool_id, workspace_id],
+        )
+        .map_err(|err| err.to_string())?;
+
+    if changed == 0 {
+        return Err("工作区不存在".to_string());
+    }
+
+    drop(db);
+    list_workspaces(state)
 }
 
 fn read_tools(db: &Connection) -> Result<Vec<CliTool>, String> {
@@ -702,9 +864,11 @@ fn session_roots(app: &AppHandle) -> Vec<PathBuf> {
             home.join(".opencode"),
             home.join(".codex"),
             home.join(".claude"),
+            home.join(".antigravity"),
             home.join(".local").join("share").join("opencode"),
             home.join("AppData").join("Roaming").join("opencode"),
             home.join("AppData").join("Roaming").join("Claude"),
+            home.join("AppData").join("Local").join("agy"),
         ]);
     }
 
@@ -723,6 +887,8 @@ fn roots_for_tool(roots: &[PathBuf], tool_name: &str) -> Vec<PathBuf> {
                 root_name.contains("codex")
             } else if needle.contains("opencode") {
                 root_name.contains("opencode")
+            } else if needle.contains("antigravity") {
+                root_name.contains("antigravity") || root_name.contains("agy")
             } else {
                 true
             }
@@ -932,6 +1098,17 @@ fn unsupported_background_session_list(tool_name: &str, command: &str) -> Option
         });
     }
 
+    if tool_name.contains("antigravity") {
+        let message = "Antigravity CLI 当前通过交互式选择器恢复会话：agy --resume。该命令要求真实终端，不能在后台捕获为列表；打开指定会话时使用 agy --resume <session_id>。";
+        return Some(ToolSessionList {
+            command: format!("{command} --resume"),
+            output: message.to_string(),
+            stderr: String::new(),
+            lines: vec![message.to_string()],
+            sessions: Vec::new(),
+        });
+    }
+
     None
 }
 
@@ -944,6 +1121,8 @@ fn tool_session_command(tool_name: &str, command: &str) -> String {
     } else if tool_name.contains("codex") {
         format!("{command} resume --all")
     } else if tool_name.contains("claude") {
+        format!("{command} --resume")
+    } else if tool_name.contains("antigravity") {
         format!("{command} --resume")
     } else {
         format!("{command} session")
@@ -968,6 +1147,8 @@ fn tool_open_session_command(
     } else if tool_name.contains("codex") {
         Ok(format!("{command} resume {}", shell_arg(session_id)))
     } else if tool_name.contains("claude") {
+        Ok(format!("{command} --resume {}", shell_arg(session_id)))
+    } else if tool_name.contains("antigravity") {
         Ok(format!("{command} --resume {}", shell_arg(session_id)))
     } else {
         Err(format!("暂不支持打开 {tool_name} 的指定会话"))
@@ -1046,7 +1227,12 @@ fn parse_generic_session_line(line: &str) -> Option<ToolSessionItem> {
     })
 }
 
-fn spawn_terminal(cwd: &str, command: &str, proxy_url: Option<&str>) -> Result<(), String> {
+fn spawn_terminal(
+    cwd: &str,
+    tool_name: &str,
+    command: &str,
+    proxy_url: Option<&str>,
+) -> Result<(), String> {
     #[cfg(windows)]
     {
         const CREATE_NEW_CONSOLE: u32 = 0x00000010;
@@ -1057,6 +1243,9 @@ fn spawn_terminal(cwd: &str, command: &str, proxy_url: Option<&str>) -> Result<(
                 "$env:HTTP_PROXY='{0}'; $env:HTTPS_PROXY='{0}'; $env:ALL_PROXY='{0}'; ",
                 proxy_url
             ));
+        }
+        if is_codex_launch(tool_name, command) {
+            script.push_str("chcp 65001 > $null; [Console]::InputEncoding=[Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $OutputEncoding=[Text.UTF8Encoding]::new($false); ");
         }
         script.push_str(command);
 
@@ -1089,6 +1278,10 @@ fn spawn_terminal(cwd: &str, command: &str, proxy_url: Option<&str>) -> Result<(
 
         Ok(())
     }
+}
+
+fn is_codex_launch(tool_name: &str, command: &str) -> bool {
+    tool_name.to_lowercase().contains("codex") || command.to_lowercase().contains("codex")
 }
 
 fn open_in_vscode(path: &str) -> Result<(), String> {
@@ -1204,8 +1397,8 @@ pub fn run() {
                 .menu(&menu)
                 .tooltip("CLI Manager")
                 .show_menu_on_left_click(true)
-                .on_menu_event(|app: &AppHandle, event: MenuEvent| {
-                    match event.id().as_ref() {
+                .on_menu_event(
+                    |app: &AppHandle, event: MenuEvent| match event.id().as_ref() {
                         "show" => {
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
@@ -1216,8 +1409,8 @@ pub fn run() {
                             app.exit(0);
                         }
                         _ => {}
-                    }
-                })
+                    },
+                )
                 .build(app)?;
 
             let app_handle = app.handle().clone();
@@ -1239,8 +1432,12 @@ pub fn run() {
             list_workspaces,
             add_workspace,
             delete_workspace,
+            update_workspace,
+            toggle_workspace_favorite,
+            toggle_workspace_archived,
             open_workspace_in_vscode,
             open_in_explorer,
+            set_workspace_default_tool,
             list_tools,
             get_proxy_config,
             save_proxy_config,
