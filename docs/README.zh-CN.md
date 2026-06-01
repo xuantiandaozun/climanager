@@ -2,9 +2,11 @@
 
 [English](../README.md)
 
-CLI Manager 是一个本地优先的 AI 编码 CLI 工作区管理桌面应用。
+CLI Manager 是一个本地优先的 AI 编码 CLI 工作流桌面管理器。
 
-它用于把项目目录、CLI 启动入口、代理配置、启动历史和会话文件索引集中到一个地方，适合经常在多个代码仓库和 AI CLI 工具之间切换的开发者。
+它帮助开发者组织项目工作区，从所选工作区目录启动 Codex、Claude Code 和 OpenCode 等 AI 编码 CLI，管理代理设置，并索引本地会话历史。CLI Manager 自身会将工作区元数据和会话索引保留在本地，不会将这些数据发送到远程服务器。
+
+项目目标是让面向开源维护者和独立开发者的 AI 辅助开发工作流更可靠、更私密、更可复现。
 
 ## 功能
 
@@ -60,8 +62,10 @@ powershell.exe -NoExit -Command <tool>
 - `~/.local/share/opencode`
 - `~/.codex`
 - `~/.claude`
+- `~/.antigravity`
 - `~/AppData/Roaming/opencode`
 - `~/AppData/Roaming/Claude`
+- `~/AppData/Local/agy`
 
 扫描过程不会修改原始会话文件。
 

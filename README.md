@@ -2,9 +2,13 @@
 
 [中文说明](docs/README.zh-CN.md)
 
-CLI Manager is a local-first desktop app for managing AI coding CLI workspaces.
+[Roadmap](ROADMAP.md)
 
-It helps connect project folders, CLI launchers, proxy settings, launch history, and indexed session files in one place. The project is designed for developers who regularly switch between multiple repositories and AI CLI tools such as `opencode`, `codex`, and `claude code`.
+CLI Manager is a local-first desktop manager for AI coding CLI workflows.
+
+It helps developers organize project workspaces, launch AI coding CLIs such as Codex, Claude Code, and OpenCode from the selected workspace directory, manage proxy settings, and index local session history. CLI Manager itself keeps workspace metadata and session indexing local instead of sending that data to any remote server.
+
+The goal is to make AI-assisted development workflows more reliable, private, and reproducible for open source maintainers and solo developers.
 
 ## Features
 
@@ -60,8 +64,10 @@ Default scan locations include:
 - `~/.local/share/opencode`
 - `~/.codex`
 - `~/.claude`
+- `~/.antigravity`
 - `~/AppData/Roaming/opencode`
 - `~/AppData/Roaming/Claude`
+- `~/AppData/Local/agy`
 
 The original session files are not modified.
 
