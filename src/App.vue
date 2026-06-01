@@ -94,6 +94,7 @@ const isLoadingModalSessions = ref(false)
 const statusMessage = ref('')
 const isBusy = ref(false)
 const currentPage = ref<PageId>('overview')
+const overviewRecentWorkspaceIds = ref<number[]>([])
 
 const navPages: { id: PageId }[] = [
   { id: 'overview' },
@@ -127,6 +128,12 @@ const recentWorkspaces = computed(() =>
   [...activeWorkspaces.value]
     .sort((left, right) => workspaceSortValue(right) - workspaceSortValue(left))
     .slice(0, 6),
+)
+
+const overviewRecentWorkspaces = computed(() =>
+  overviewRecentWorkspaceIds.value
+    .map((id) => workspaces.value.find((workspace) => workspace.id === id))
+    .filter((workspace): workspace is Workspace => Boolean(workspace)),
 )
 
 const workspaceViewCounts = computed(() => ({
@@ -229,9 +236,9 @@ watch(workspaceGroupOptions, (options) => {
 }, { immediate: true })
 
 watch(currentPage, async (page) => {
-  if (page === 'workspaces') {
+  if (page === 'overview' || page === 'workspaces') {
     try {
-      workspaces.value = await invoke<Workspace[]>('list_workspaces')
+      await refreshWorkspaces({ syncOverview: true })
     } catch (error) {
       statusMessage.value = readableError(error)
     }
@@ -260,17 +267,22 @@ async function refreshAll() {
     proxy.value = proxyResult
     history.value = historyResult
     sessions.value = sessionResult
-    if (!workspaces.value.some((workspace) => workspace.id === selectedWorkspaceId.value)) {
-      selectedWorkspaceId.value = workspaces.value[0]?.id ?? null
-    }
-    if (!tools.value.some((tool) => tool.id === selectedToolId.value)) {
-      selectedToolId.value = tools.value[0]?.id ?? null
-    }
+    syncOverviewRecentWorkspaces()
+    syncSelectedWorkspace()
+    syncSelectedTool()
     statusMessage.value = t('status.synced')
   } catch (error) {
     statusMessage.value = readableError(error)
   } finally {
     isBusy.value = false
+  }
+}
+
+async function refreshWorkspaces(options: { syncOverview?: boolean } = {}) {
+  workspaces.value = await invoke<Workspace[]>('list_workspaces')
+  syncSelectedWorkspace()
+  if (options.syncOverview) {
+    syncOverviewRecentWorkspaces()
   }
 }
 
@@ -570,6 +582,22 @@ function workspaceSortValue(workspace: Workspace) {
   return Date.parse(workspace.last_opened_at ?? workspace.created_at) || 0
 }
 
+function syncOverviewRecentWorkspaces() {
+  overviewRecentWorkspaceIds.value = recentWorkspaces.value.map((workspace) => workspace.id)
+}
+
+function syncSelectedWorkspace() {
+  if (!workspaces.value.some((workspace) => workspace.id === selectedWorkspaceId.value)) {
+    selectedWorkspaceId.value = workspaces.value[0]?.id ?? null
+  }
+}
+
+function syncSelectedTool() {
+  if (!tools.value.some((tool) => tool.id === selectedToolId.value)) {
+    selectedToolId.value = tools.value[0]?.id ?? null
+  }
+}
+
 function workspaceFavoriteLabel(workspace: Workspace) {
   return workspace.favorite ? t('button.unfavorite') : t('button.favorite')
 }
@@ -677,9 +705,9 @@ function readableError(error: unknown) {
               <span>{{ $t('launch.current_workspace') }}</span>
               <strong>{{ selectedWorkspace?.name ?? $t('launch.not_selected') }}</strong>
             </div>
-            <div v-if="recentWorkspaces.length" class="workspace-grid">
+            <div v-if="overviewRecentWorkspaces.length" class="workspace-grid">
               <article
-                v-for="workspace in recentWorkspaces"
+                v-for="workspace in overviewRecentWorkspaces"
                 :key="workspace.id"
                 :class="['workspace-card', { selected: workspace.id === selectedWorkspaceId }]"
                 @click="selectedWorkspaceId = workspace.id; if (workspace.default_tool_id) selectedToolId = workspace.default_tool_id"

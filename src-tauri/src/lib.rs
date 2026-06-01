@@ -621,6 +621,7 @@ fn seed_tools(db: &Connection) -> Result<(), String> {
         ("codex", "codex"),
         ("claude code", "claude"),
         ("antigravity cli", "agy"),
+        ("cursor", "agent"),
     ];
 
     for (name, command) in tools {
@@ -1249,11 +1250,14 @@ fn spawn_terminal(
         }
         script.push_str(command);
 
-        Command::new("powershell.exe")
-            .current_dir(cwd)
+        let mut cmd = Command::new("powershell.exe");
+        cmd.current_dir(cwd)
             .creation_flags(CREATE_NEW_CONSOLE | CREATE_BREAKAWAY_FROM_JOB)
-            .args(["-NoExit", "-Command", &script])
-            .spawn()
+            .args(["-NoExit", "-Command", &script]);
+        if let Some(path) = refreshed_path() {
+            cmd.env("PATH", path);
+        }
+        cmd.spawn()
             .map_err(|err| format!("启动终端失败: {err}"))?;
 
         Ok(())
@@ -1278,6 +1282,24 @@ fn spawn_terminal(
 
         Ok(())
     }
+}
+
+#[cfg(windows)]
+fn refreshed_path() -> Option<String> {
+    let output = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "[Environment]::GetEnvironmentVariable('Path','User')",
+        ])
+        .output()
+        .ok()?;
+    let user_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if user_path.is_empty() {
+        return None;
+    }
+    let machine_path = std::env::var("PATH").unwrap_or_default();
+    Some(format!("{};{}", user_path, machine_path))
 }
 
 fn is_codex_launch(tool_name: &str, command: &str) -> bool {
